@@ -1,7 +1,7 @@
 pct-vim
 =======
 
-# PCT - Precise Code Tracking
+# PCT-VIM - Precise Code Tracking Vim plugin
 by @d0c_s4vage
 
 ## Intro
