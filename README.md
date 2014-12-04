@@ -17,11 +17,18 @@ and notes that were taken/added for line ranges.
 
 Follow the steps below to initialize the database:
 
-1. Source pct.vim
-2. Open a file in a project that you wish to audit
-3. Run the command below to initialize the database:
+1. Install [dependencies](#Dependencies)
+2. Source pct.vim
+3. Open a file in a project that you wish to audit
+4. Run the command below to initialize the database:
 		`:PctInit`
-4. Begin auditing!
+5. Begin auditing!
+
+## Dependencies
+
+* Vim
+* Python
+* `peewee` python module (`pip install peewee`)
 
 ## Key mappings
 
