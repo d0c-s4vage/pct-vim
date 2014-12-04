@@ -6,7 +6,8 @@ by @d0c_s4vage
 
 ## Intro
 
-This plugin is intended to assist in code auditing by enabling one to
+This plugin is the vim implementation of the PCT method developed
+by @tmanning. It is intended to assist in code auditing by enabling one to
 annotate read-only source code from a text editor. This plugin
 is the vim implementation. See @tmanning for the textmate implementation.
 
