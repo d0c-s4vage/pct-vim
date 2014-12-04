@@ -25,6 +25,10 @@ Follow the steps below to initialize the database:
 		`:PctInit`
 5. Begin auditing!
 
+Be aware that the plugin treats the root dirname of the database path as
+the root of the project. Any files in subfolders of the root project path
+will be included in reports and are considered "part of the project".
+
 ## Dependencies
 
 * Vim
