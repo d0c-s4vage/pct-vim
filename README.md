@@ -56,7 +56,7 @@ Follow the steps below to initialize the database:
 ## Notes
 
 Note that the only differentiation between annotations/findings/todos is the
-existince of certain keywords in the annotation. Todos contain the word
+existence of certain keywords in the annotation. Todos contain the word
 "TODO" in the text, findings contain the word "FINDING" in the text, and
 generic annotations don't contain either.
 
