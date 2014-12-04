@@ -67,3 +67,25 @@ generic annotations don't contain either.
 
 * ability to mark files as out-of-scope
 * ability to edit/delete annotations
+
+## Screenshots
+
+Lines marked as reviewed
+
+![Reviewed lines](http://i.imgur.com/xN8uduB.png)
+
+A simple note/annotation
+
+![Simple note/annotation](http://i.imgur.com/SHEMVEK.png)
+
+A todo
+
+![A todo](http://i.imgur.com/F3eqsU9.png)
+
+A finding
+
+![A finding](http://i.imgur.com/zr0xoDV.png)
+
+Report and History
+
+![PCT Report and History](http://i.imgur.com/m8G7eno.png)
