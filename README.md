@@ -17,7 +17,7 @@ and notes that were taken/added for line ranges.
 
 Follow the steps below to initialize the database:
 
-1. Install [dependencies](#Dependencies)
+1. Install [dependencies](#dependencies)
 2. Source pct.vim
 3. Open a file in a project that you wish to audit
 4. Run the command below to initialize the database:
