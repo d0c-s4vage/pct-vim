@@ -326,7 +326,7 @@ def create_db(dest_path):
 	try:
 		DB.create_tables([Path, Review, Note, Scope])
 	except Exception as e:
-		if "already exists" in e.message:
+		if "already exists" in str(e):
 			pass
 		else:
 			raise
