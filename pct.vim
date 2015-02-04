@@ -431,7 +431,7 @@ def get_review(path, line_start, line_end, column_start=0, column_end=0, create=
 	Get or create a review at path `path`, line, and columns. Path can be either
 	an ORM object or a string
 	"""
-	if type(path) in [unicode,str]:
+	if type(path) in [str]:
 		path = get_path(path)
 	
 	try:
