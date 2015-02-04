@@ -64,7 +64,7 @@
 " ---------------------------------------------
 
 function! DefinePct()
-python <<EOF
+python3 <<EOF
 # -*- coding: utf-8 -*-
 from contextlib import contextmanager
 import datetime
@@ -91,6 +91,8 @@ THIS_SCRIPT = vim.eval("expand('<sfile>')")
 DB = None
 DB_PATH = None
 DB_NAME = "pct.sqlite"
+
+SHOW_ANNOTATIONS = True
 
 def _input(message = 'input'):
 	vim.command('call inputsave()')
@@ -189,11 +191,20 @@ def root_path():
 	"""
 	return os.path.abspath(os.path.dirname(DB.database))
 
+def reduce_path(path):
+	"""
+	Return a path that does not have double separators, etc. Sometimes double
+	separators occurs when using cscope/ctags/other tools
+	"""
+	return path.replace(os.path.sep * 2, os.path.sep)
+
 def norm_path(path):
 	"""
 	Return a path that is relative to the database!
 	"""
-	return os.path.relpath(path, os.path.dirname(DB.database))
+	res = os.path.relpath(path, os.path.dirname(DB.database))
+	res = reduce_path(res)
+	return res
 
 def file_is_reviewable(path):
 	"""
@@ -258,7 +269,7 @@ def warn(msg):
 def ok(msg):
 	_msg("✓", msg, color=Colors.OKGREEN)
 
-def find_db(max_levels=10):
+def find_db(max_levels=15):
 	db_name = DB_NAME
 	curr_level = 0
 	curr_path = db_name
@@ -354,7 +365,9 @@ def prompt_for_db_path():
 def init_db(create=True):
 	"""
 	"""
-	found_db = find_db()
+	found_db = None
+	if not create:
+		found_db = find_db()
 	if found_db is None and create:
 		db_path = prompt_for_db_path()
 
@@ -557,7 +570,14 @@ def update_status(bufname=None):
 	except:
 		pass
 
+def unload_signs_buffer(bufname):
+	command = "sign unplace *"
+	vim.command(command)
+
 def load_signs_buffer(bufname):
+	if not SHOW_ANNOTATIONS:
+		return
+
 	# only worry about files that exist!
 	if bufname is None or not os.path.exists(bufname):
 		return
@@ -583,6 +603,10 @@ def load_signs_new_buffer():
 		return
 
 	load_signs_buffer(curr_file)
+
+def set_initial_review_mark():
+	# mark the first line in the file with the "c" mark
+	vim.command('execute "normal! mc"')
 
 def load_signs_all_buffers():
 	if DB is not None:
@@ -780,7 +804,20 @@ def _report_info():
 	statuses += unopened
 
 	return statuses
-	
+
+def toggle_annotations():
+	global SHOW_ANNOTATIONS
+
+	if SHOW_ANNOTATIONS:
+		hide_annotations()
+	else:
+		show_annotations()
+
+	SHOW_ANNOTATIONS = not SHOW_ANNOTATIONS
+
+def hide_annotations():
+	pass
+
 report_name = "__THE_AUDIT_REPORT__"
 def toggle_report():
 	if buff_exists(report_name):
@@ -842,19 +879,29 @@ def toggle_history():
 	
 	history()
 
-def history(n=50):
+def history(n=50, match=None):
 	"""
 	"""
 	history = []
 	for review in PctModels.Review.select().order_by(PctModels.Review.timestamp.desc()).limit(n):
-		history.append("{}:{} - {}".format(rev_norm_path(review.path.path), review.line_start, review.timestamp))
+		showed_filename = False
+		if match is None:
+			history.append("{}:{} - {}".format(rev_norm_path(review.path.path), review.line_start, review.timestamp))
+			showed_filename = True
 
 		notes = PctModels.Note.select().where(PctModels.Note.review == review)
 		count = 0
 		for note in notes:
-			history.append("\tNOTE ({})\n{}".format(note.timestamp, "\n".join("\t\t%s" % (x) for x in note.note.split("\n"))))
+			if match is None or match in note.note:
+				if not showed_filename:
+					history.append("{}:{}".format(rev_norm_path(review.path.path), review.line_start))
+					showed_filename = True
+				history.append("\tNOTE ({})\n{}".format(note.timestamp, "\n".join("\t\t%s" % (x) for x in note.note.split("\n"))))
 	
-	create_scratch("HISTORY:\n\n" + "\n".join(history), scratch_name=history_name)
+	if match is None:
+		create_scratch("HISTORY:\n\n" + "\n".join(history), scratch_name=history_name)
+	else:
+		create_scratch("HISTORY MATCHING " + match + ":\n\n" + "\n".join(history), scratch_name=history_name)
 
 	vim.command("normal! gg")
 
@@ -993,6 +1040,9 @@ note_scratch = "__THE_AUDIT_NOTE__"
 def show_current_notes():
 	global had_note
 
+	if not SHOW_ANNOTATIONS:
+		return
+
 	m = mode()
 
 	line,_ = vim.current.window.cursor
@@ -1105,67 +1155,73 @@ call DefinePct()
 function! DefineAutoCommands()
 	augroup Pct!
 		autocmd!
-		autocmd BufAdd * py load_signs_new_buffer()
-		autocmd BufEnter * py buff_enter()
+		autocmd BufReadPre * py3 set_initial_review_mark()
+		autocmd BufAdd * py3 load_signs_new_buffer()
+		autocmd BufEnter * py3 buff_enter()
 		autocmd BufWritePost * call MaybeSaveNote()
-		autocmd VimEnter * py load_signs_all_buffers()
-		autocmd CursorMoved * py cursor_moved()
+		autocmd VimEnter * py3 load_signs_all_buffers()
+		autocmd CursorMoved * py3 cursor_moved()
 	augroup END
 endfunction
 
-py init_db(create=False)
+py3 init_db(create=False)
 
 " ---------------------------------------------
 " ---------------------------------------------
 
 " mark the selected line as as reviewed
-vmap [r :py review_selection()<CR> 
-nmap [r :py review_current_line()<CR>
+vmap [r :py3 review_selection()<CR> 
+nmap [r :py3 review_current_line()<CR>
+
+" mark from last mark up the cursor as reviewed
+nmap [u mx'cV`x[rmc
 
 " annotate the selected lines
-vmap [a :py note_selection()<CR> 
-nmap [a :py note_current_line()<CR>
-vmap [A :py note_selection(multi=True)<CR> 
-nmap [A :py note_current_line(multi=True)<CR>
+vmap [a :py3 note_selection()<CR> 
+nmap [a :py3 note_current_line()<CR>
+vmap [A :py3 note_selection(multi=True)<CR> 
+nmap [A :py3 note_current_line(multi=True)<CR>
 
 " add a finding for the selected lines
-vmap [f :py note_selection(prefix="FINDING", prompt="finding")<CR> 
-nmap [f :py note_current_line(prefix="FINDING", prompt="finding")<CR>
-vmap [F :py note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
-nmap [F :py note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
+vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR> 
+nmap [f :py3 note_current_line(prefix="FINDING", prompt="finding")<CR>
+vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
+nmap [F :py3 note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
 
 " add a todo for the selected lines
-vmap [t :py note_selection(prefix="TODO", prompt="todo")<CR> 
-nmap [t :py note_current_line(prefix="TODO", prompt="todo")<CR>
-vmap [T :py note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
-nmap [T :py note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
+vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR> 
+nmap [t :py3 note_current_line(prefix="TODO", prompt="todo")<CR>
+vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
+nmap [T :py3 note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
 
 " toggle auditing (q like record)
 " NOTE - not really recommended, is more of an experiment
-" map [q :py toggle_audit()<CR>
+" map [q :py3 toggle_audit()<CR>
+
+nmap [H :py3 toggle_annotations()<CR>
 
 " show the current report
-nmap [R :py toggle_report()<CR>
+nmap [R :py3 toggle_report()<CR>
 
 " show all notes containing the current line
 " this should not be needed, as the current line's notes are automatically
 " displayed
-map [? :py show_current_notes()<CR>
+map [? :py3 show_current_notes()<CR>
 
 " show a recent history
-map [h :py toggle_history()<CR>
+map [h :py3 toggle_history()<CR>
 
 " open the filepath under the cursor in a new tab
 map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>
 
 " jump to the previous note
-nmap <silent> [n :py jump_to_note()<CR>
-nmap <silent> [N :py jump_to_note(direction=-1)<CR>
+nmap <silent> [n :py3 jump_to_note()<CR>
+nmap <silent> [N :py3 jump_to_note(direction=-1)<CR>
 
-command! -nargs=0 PctReport py report()
-command! -nargs=0 PctNotes py notes()
-command! -nargs=0 PctAudit py toggle_audit()
-command! -nargs=0 PctInit py init_db()
+command! -nargs=0 PctReport py3 report()
+command! -nargs=0 PctNotes py3 notes()
+command! -nargs=0 PctAudit py3 toggle_audit()
+command! -nargs=0 PctInit py3 init_db(True)
 
 " always show the status of files
 set laststatus=2
@@ -1198,6 +1254,6 @@ call DefineHighlights()
 
 function! MaybeSaveNote()
 	if exists("b:new_note")
-		py save_note_from_buffer()
+		py3 save_note_from_buffer()
 	endif
 endfunction
