@@ -665,7 +665,7 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 
 def multi_input(placeholder):
 	tmp = tempfile.NamedTemporaryFile(delete=False)
-	tmp.write(placeholder)
+	tmp.write(bytes(placeholder, "utf-8"))
 	tmp.close()
 
 	create_scratch(placeholder, width=80, set_buftype=False, scratch_name=tmp.name, modify=True)
