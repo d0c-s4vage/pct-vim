@@ -344,7 +344,7 @@ def prompt_for_db_path():
 		opts.append(db_path)
 
 	warn("Annotation location options:")
-	for x in xrange(len(opts)):
+	for x in range(len(opts)):
 		opt = opts[x]
 		warn("  %s - %s" % (x, opt))
 	
