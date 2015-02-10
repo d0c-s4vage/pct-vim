@@ -92,6 +92,8 @@ DB = None
 DB_PATH = None
 DB_NAME = "pct.sqlite"
 
+SHOW_ANNOTATIONS = True
+
 def _input(message = 'input'):
 	vim.command('call inputsave()')
 	vim.command("let user_input = input('" + message + ": ')")
@@ -189,11 +191,20 @@ def root_path():
 	"""
 	return os.path.abspath(os.path.dirname(DB.database))
 
+def reduce_path(path):
+	"""
+	Return a path that does not have double separators, etc. Sometimes double
+	separators occurs when using cscope/ctags/other tools
+	"""
+	return path.replace(os.path.sep * 2, os.path.sep)
+
 def norm_path(path):
 	"""
 	Return a path that is relative to the database!
 	"""
-	return os.path.relpath(path, os.path.dirname(DB.database))
+	res = os.path.relpath(path, os.path.dirname(DB.database))
+	res = reduce_path(res)
+	return res
 
 def file_is_reviewable(path):
 	"""
@@ -258,7 +269,7 @@ def warn(msg):
 def ok(msg):
 	_msg("✓", msg, color=Colors.OKGREEN)
 
-def find_db(max_levels=10):
+def find_db(max_levels=15):
 	db_name = DB_NAME
 	curr_level = 0
 	curr_path = db_name
@@ -315,7 +326,7 @@ def create_db(dest_path):
 	try:
 		DB.create_tables([Path, Review, Note, Scope])
 	except Exception as e:
-		if "already exists" in e.message:
+		if "already exists" in str(e):
 			pass
 		else:
 			raise
@@ -333,7 +344,7 @@ def prompt_for_db_path():
 		opts.append(db_path)
 
 	warn("Annotation location options:")
-	for x in xrange(len(opts)):
+	for x in range(len(opts)):
 		opt = opts[x]
 		warn("  %s - %s" % (x, opt))
 	
@@ -344,6 +355,7 @@ def prompt_for_db_path():
 		choice = int(choice)
 	except:
 		err("Invalid choice")
+		return
 
 	if not (0 <= choice < len(opts)):
 		err("Invalid choice")
@@ -354,7 +366,9 @@ def prompt_for_db_path():
 def init_db(create=True):
 	"""
 	"""
-	found_db = find_db()
+	found_db = None
+	if not create:
+		found_db = find_db()
 	if found_db is None and create:
 		db_path = prompt_for_db_path()
 
@@ -418,7 +432,7 @@ def get_review(path, line_start, line_end, column_start=0, column_end=0, create=
 	Get or create a review at path `path`, line, and columns. Path can be either
 	an ORM object or a string
 	"""
-	if type(path) in [unicode,str]:
+	if type(path) in [str]:
 		path = get_path(path)
 	
 	try:
@@ -557,10 +571,19 @@ def update_status(bufname=None):
 	except:
 		pass
 
+def unload_signs_buffer(bufname):
+	command = "sign unplace *"
+	vim.command(command)
+
 def load_signs_buffer(bufname):
+	if not SHOW_ANNOTATIONS:
+		return
+
 	# only worry about files that exist!
 	if bufname is None or not os.path.exists(bufname):
 		return
+	
+	unload_signs_buffer(bufname)
 
 	path = get_path(bufname)
 	reviews = get_reviews(path)
@@ -583,6 +606,10 @@ def load_signs_new_buffer():
 		return
 
 	load_signs_buffer(curr_file)
+
+def set_initial_review_mark():
+	# mark the first line in the file with the "c" mark
+	vim.command('execute "normal! mc"')
 
 def load_signs_all_buffers():
 	if DB is not None:
@@ -641,7 +668,7 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 
 def multi_input(placeholder):
 	tmp = tempfile.NamedTemporaryFile(delete=False)
-	tmp.write(placeholder)
+	tmp.write(bytes(placeholder, "utf-8"))
 	tmp.close()
 
 	create_scratch(placeholder, width=80, set_buftype=False, scratch_name=tmp.name, modify=True)
@@ -780,7 +807,20 @@ def _report_info():
 	statuses += unopened
 
 	return statuses
-	
+
+def toggle_annotations():
+	global SHOW_ANNOTATIONS
+
+	if SHOW_ANNOTATIONS:
+		hide_annotations()
+	else:
+		show_annotations()
+
+	SHOW_ANNOTATIONS = not SHOW_ANNOTATIONS
+
+def hide_annotations():
+	pass
+
 report_name = "__THE_AUDIT_REPORT__"
 def toggle_report():
 	if buff_exists(report_name):
@@ -842,19 +882,29 @@ def toggle_history():
 	
 	history()
 
-def history(n=50):
+def history(n=50, match=None):
 	"""
 	"""
 	history = []
 	for review in PctModels.Review.select().order_by(PctModels.Review.timestamp.desc()).limit(n):
-		history.append("{}:{} - {}".format(rev_norm_path(review.path.path), review.line_start, review.timestamp))
+		showed_filename = False
+		if match is None:
+			history.append("{}:{} - {}".format(rev_norm_path(review.path.path), review.line_start, review.timestamp))
+			showed_filename = True
 
 		notes = PctModels.Note.select().where(PctModels.Note.review == review)
 		count = 0
 		for note in notes:
-			history.append("\tNOTE ({})\n{}".format(note.timestamp, "\n".join("\t\t%s" % (x) for x in note.note.split("\n"))))
+			if match is None or match in note.note:
+				if not showed_filename:
+					history.append("{}:{}".format(rev_norm_path(review.path.path), review.line_start))
+					showed_filename = True
+				history.append("\tNOTE ({})\n{}".format(note.timestamp, "\n".join("\t\t%s" % (x) for x in note.note.split("\n"))))
 	
-	create_scratch("HISTORY:\n\n" + "\n".join(history), scratch_name=history_name)
+	if match is None:
+		create_scratch("HISTORY:\n\n" + "\n".join(history), scratch_name=history_name)
+	else:
+		create_scratch("HISTORY MATCHING " + match + ":\n\n" + "\n".join(history), scratch_name=history_name)
 
 	vim.command("normal! gg")
 
@@ -867,6 +917,8 @@ def _review_lines(filename, line_start, line_end):
 		show_review_signs(review)
 		ok("marked as reviewed")
 
+	load_signs_buffer(vim.current.buffer.name)
+	
 	return review
 
 def review_selection():
@@ -885,7 +937,7 @@ def review_current_line():
 	line,_ = vim.current.window.cursor
 	_review_lines(vim.current.buffer.name, line, line)
 
-def note_selection(prefix="", prompt="note", multi=False):
+def note_selection(prefix="", prompt="note", multi=False, start=None, end=None):
 	if not file_is_reviewable(vim.current.buffer.name):
 		return
 
@@ -932,7 +984,7 @@ def save_note_from_buffer():
 	
 	show_note_signs(new_note)
 
-def note_current_line(prefix="", prompt="note", multi=False):
+def note_current_line(prefix="", prompt="note", multi=False, placeholder=""):
 	if not file_is_reviewable(vim.current.buffer.name):
 		return
 
@@ -988,10 +1040,57 @@ def cursor_moved():
 			review = add_review(filename, line, line)
 			show_review_signs(review)
 
+def get_notes_for_line(filename, line):
+	if not file_is_reviewable(filename):
+		return []
+	
+	all_notes = get_notes(filename)
+	count = 0
+	notes = []
+	for note in all_notes:
+		start = note.review.line_start
+		end = note.review.line_end
+		if start <= line and end >= line:
+			notes.append(note)
+	return notes
+
+def note_to_text(note):
+	start = note.review.line_start
+	end = note.review.line_end
+	if start != end:
+		return "NOTE ({}-{}): {}".format(
+			start,
+			end,
+			note.note
+		)
+	else:
+		return "NOTE ({}): {}".format(
+			start,
+			note.note
+		)
+
+def get_note_text_for_line(filename, line):
+	if not file_is_reviewable(filename):
+		return []
+	
+	notes = get_notes_for_line(filename, line)
+	text = []
+	for note in notes:
+		if len(text) > 0:
+			text.append("---------------------")
+		text.append(note_to_text(note))
+	
+	return text
+
 had_note = False
 note_scratch = "__THE_AUDIT_NOTE__"
-def show_current_notes():
+status_line_notes = True
+def show_current_notes(status_line_notes_override=False):
 	global had_note
+	global status_line_notes
+
+	if not SHOW_ANNOTATIONS:
+		return
 
 	m = mode()
 
@@ -1004,39 +1103,32 @@ def show_current_notes():
 	if not file_is_reviewable(filename):
 		return
 
-	notes = get_notes(filename)
-	count = 0
-	text = []
-	for note in notes:
-		start = note.review.line_start
-		end = note.review.line_end
-		if start <= line and end >= line:
-			if count > 0:
-				text.append("---------------------")
-			if start != end:
-				text.append("NOTE ({}-{}): {}".format(
-					start,
-					end,
-					note.note
-				))
-			else:
-				text.append("NOTE ({}): {}".format(
-					start,
-					note.note
-				))
-			count += 1
+	text = get_note_text_for_line(filename, line)
 	
-	
-	if count > 0:
-		create_scratch("\n".join(text),
-			fit_to_contents=False,
-			return_to_orig=True,
-			scratch_name=note_scratch,
-			retnr=orig_bufnr,
-			wrap=True
-		)
-		had_note = True
-	elif count == 0 and buff_exists(note_scratch):
+	if status_line_notes and not status_line_notes_override:
+		if len(text) > 0:
+			status = text[0].split("\n")[0]
+			# if there's more than one note, or the note is a multi-line note,
+			# show some indication that there's more to be read
+			if len(text) > 1:
+				status += " +++"
+			elif len(text[0]) > len(status):
+				status += " ..."
+			info(status)
+		else:
+			print("")
+	else:
+		if len(text) > 0:
+			create_scratch("\n".join(text),
+				fit_to_contents=False,
+				return_to_orig=True,
+				scratch_name=note_scratch,
+				retnr=orig_bufnr,
+				wrap=True
+			)
+			had_note = True
+
+	if len(text) == 0 and buff_exists(note_scratch):
 		buff_goto(note_scratch)
 		retnr = int(vim.eval("b:retnr"))
 		if retnr != -1:
@@ -1050,6 +1142,104 @@ def show_current_notes():
 	# reselect whatever whas selected in visual mode
 	if is_visual(m) and (closed_note or had_note):
 		vim.command("normal! gv")
+
+def delete_note_on_line():
+	"""
+	Delete the note associated with the current line
+	"""
+
+	line,_ = vim.current.window.cursor
+	filename = vim.current.buffer.name
+	orig_bufnr = winnr()
+
+	if not file_is_reviewable(filename):
+		return
+	
+	notes = get_notes_for_line(filename, line)
+	if len(notes) == 0:
+		return
+	
+	if len(notes) == 1:
+		choice = _input("Are you sure you want to delete the current note? (y/n)")
+		if choice[0].lower() == "y":
+			notes[0].delete_instance()
+			notes[0].review.delete_instance()
+			ok("Deleted note")
+			load_signs_buffer(vim.current.buffer.name)
+	
+	else:
+		idx = 0
+		for note in notes:
+			text = note_to_text(note)
+			warn("  %s - %s" % (idx, text.split("\n")[0]))
+			idx += 1
+		choice = _input("Which note would you like to delete? (0-%d)" % (len(notes)-1))
+		print("")
+
+		try:
+			choice = int(choice)
+		except:
+			err("Invalid choice")
+			return
+
+		if not (0 <= choice <= len(notes)):
+			err("Invalid choice")
+			return
+
+		notes[choice].delete_instance()
+		notes[choice].review.delete_instance()
+		print("")
+		ok("Deleted note")
+		load_signs_buffer(vim.current.buffer.name)
+
+def edit_note_on_line():
+	"""
+	Delete the note associated with the current line
+	"""
+	return
+	# this is not ready yet
+
+	line,_ = vim.current.window.cursor
+	filename = vim.current.buffer.name
+	orig_bufnr = winnr()
+
+	if not file_is_reviewable(filename):
+		return
+	
+	notes = get_notes_for_line(filename, line)
+	if len(notes) == 0:
+		return
+	
+	if len(notes) == 1:
+		note = notes[0]
+		note_text = note.note
+		note.delete_instance()
+
+		start = note.review.line_start
+		end = note.review.line_end
+	else:
+		idx = 0
+		for note in notes:
+			text = note_to_text(note)
+			warn("  %s - %s" % (idx, text.split("\n")[0]))
+			idx += 1
+		choice = _input("Which note would you like to delete? (0-%d)" % (len(notes)-1))
+		print("")
+
+		try:
+			choice = int(choice)
+		except:
+			err("Invalid choice")
+			return
+
+		if not (0 <= choice <= len(notes)):
+			err("Invalid choice")
+			return
+
+		notes[choice].delete_instance()
+		print("")
+		ok("Deleted note")
+		load_signs_buffer(vim.current.buffer.name)
 
 def jump_to_note(direction=1, curr_line=None):
 	"""
@@ -1105,6 +1295,7 @@ call DefinePct()
 function! DefineAutoCommands()
 	augroup Pct!
 		autocmd!
+		autocmd BufReadPre * py set_initial_review_mark()
 		autocmd BufAdd * py load_signs_new_buffer()
 		autocmd BufEnter * py buff_enter()
 		autocmd BufWritePost * call MaybeSaveNote()
@@ -1122,6 +1313,9 @@ py init_db(create=False)
 vmap [r :py review_selection()<CR> 
 nmap [r :py review_current_line()<CR>
 
+" mark from last mark up the cursor as reviewed
+nmap [u mx'cV`x[rmc
+
 " annotate the selected lines
 vmap [a :py note_selection()<CR> 
 nmap [a :py note_current_line()<CR>
@@ -1134,6 +1328,9 @@ nmap [f :py note_current_line(prefix="FINDING", prompt="finding")<CR>
 vmap [F :py note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
 nmap [F :py note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
 
+nmap [d :py delete_note_on_line()<CR>
+nmap [e :py edit_note_on_line()<CR>
+
 " add a todo for the selected lines
 vmap [t :py note_selection(prefix="TODO", prompt="todo")<CR> 
 nmap [t :py note_current_line(prefix="TODO", prompt="todo")<CR>
@@ -1144,13 +1341,15 @@ nmap [T :py note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
 " NOTE - not really recommended, is more of an experiment
 " map [q :py toggle_audit()<CR>
 
+nmap [H :py toggle_annotations()<CR>
+
 " show the current report
 nmap [R :py toggle_report()<CR>
 
 " show all notes containing the current line
 " this should not be needed, as the current line's notes are automatically
 " displayed
-map [? :py show_current_notes()<CR>
+map [? :py show_current_notes(status_line_notes_override=True)<CR>
 
 " show a recent history
 map [h :py toggle_history()<CR>
@@ -1165,7 +1364,7 @@ nmap <silent> [N :py jump_to_note(direction=-1)<CR>
 command! -nargs=0 PctReport py report()
 command! -nargs=0 PctNotes py notes()
 command! -nargs=0 PctAudit py toggle_audit()
-command! -nargs=0 PctInit py init_db()
+command! -nargs=0 PctInit py init_db(True)
 
 " always show the status of files
 set laststatus=2
