@@ -1295,76 +1295,76 @@ call DefinePct()
 function! DefineAutoCommands()
 	augroup Pct!
 		autocmd!
-		autocmd BufReadPre * py3 set_initial_review_mark()
-		autocmd BufAdd * py3 load_signs_new_buffer()
-		autocmd BufEnter * py3 buff_enter()
+		autocmd BufReadPre * py set_initial_review_mark()
+		autocmd BufAdd * py load_signs_new_buffer()
+		autocmd BufEnter * py buff_enter()
 		autocmd BufWritePost * call MaybeSaveNote()
-		autocmd VimEnter * py3 load_signs_all_buffers()
-		autocmd CursorMoved * py3 cursor_moved()
+		autocmd VimEnter * py load_signs_all_buffers()
+		autocmd CursorMoved * py cursor_moved()
 	augroup END
 endfunction
 
-py3 init_db(create=False)
+py init_db(create=False)
 
 " ---------------------------------------------
 " ---------------------------------------------
 
 " mark the selected line as as reviewed
-vmap [r :py3 review_selection()<CR> 
-nmap [r :py3 review_current_line()<CR>
+vmap [r :py review_selection()<CR> 
+nmap [r :py review_current_line()<CR>
 
 " mark from last mark up the cursor as reviewed
 nmap [u mx'cV`x[rmc
 
 " annotate the selected lines
-vmap [a :py3 note_selection()<CR> 
-nmap [a :py3 note_current_line()<CR>
-vmap [A :py3 note_selection(multi=True)<CR> 
-nmap [A :py3 note_current_line(multi=True)<CR>
+vmap [a :py note_selection()<CR> 
+nmap [a :py note_current_line()<CR>
+vmap [A :py note_selection(multi=True)<CR> 
+nmap [A :py note_current_line(multi=True)<CR>
 
 " add a finding for the selected lines
-vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR> 
-nmap [f :py3 note_current_line(prefix="FINDING", prompt="finding")<CR>
-vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
-nmap [F :py3 note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
+vmap [f :py note_selection(prefix="FINDING", prompt="finding")<CR> 
+nmap [f :py note_current_line(prefix="FINDING", prompt="finding")<CR>
+vmap [F :py note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
+nmap [F :py note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
 
-nmap [d :py3 delete_note_on_line()<CR>
-nmap [e :py3 edit_note_on_line()<CR>
+nmap [d :py delete_note_on_line()<CR>
+nmap [e :py edit_note_on_line()<CR>
 
 " add a todo for the selected lines
-vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR> 
-nmap [t :py3 note_current_line(prefix="TODO", prompt="todo")<CR>
-vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
-nmap [T :py3 note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
+vmap [t :py note_selection(prefix="TODO", prompt="todo")<CR> 
+nmap [t :py note_current_line(prefix="TODO", prompt="todo")<CR>
+vmap [T :py note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
+nmap [T :py note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
 
 " toggle auditing (q like record)
 " NOTE - not really recommended, is more of an experiment
-" map [q :py3 toggle_audit()<CR>
+" map [q :py toggle_audit()<CR>
 
-nmap [H :py3 toggle_annotations()<CR>
+nmap [H :py toggle_annotations()<CR>
 
 " show the current report
-nmap [R :py3 toggle_report()<CR>
+nmap [R :py toggle_report()<CR>
 
 " show all notes containing the current line
 " this should not be needed, as the current line's notes are automatically
 " displayed
-map [? :py3 show_current_notes(status_line_notes_override=True)<CR>
+map [? :py show_current_notes(status_line_notes_override=True)<CR>
 
 " show a recent history
-map [h :py3 toggle_history()<CR>
+map [h :py toggle_history()<CR>
 
 " open the filepath under the cursor in a new tab
 map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>
 
 " jump to the previous note
-nmap <silent> [n :py3 jump_to_note()<CR>
-nmap <silent> [N :py3 jump_to_note(direction=-1)<CR>
+nmap <silent> [n :py jump_to_note()<CR>
+nmap <silent> [N :py jump_to_note(direction=-1)<CR>
 
-command! -nargs=0 PctReport py3 report()
-command! -nargs=0 PctNotes py3 notes()
-command! -nargs=0 PctAudit py3 toggle_audit()
-command! -nargs=0 PctInit py3 init_db(True)
+command! -nargs=0 PctReport py report()
+command! -nargs=0 PctNotes py notes()
+command! -nargs=0 PctAudit py toggle_audit()
+command! -nargs=0 PctInit py init_db(True)
 
 " always show the status of files
 set laststatus=2
@@ -1397,6 +1397,6 @@ call DefineHighlights()
 
 function! MaybeSaveNote()
 	if exists("b:new_note")
-		py3 save_note_from_buffer()
+		py save_note_from_buffer()
 	endif
 endfunction
