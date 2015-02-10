@@ -988,10 +988,50 @@ def cursor_moved():
 			review = add_review(filename, line, line)
 			show_review_signs(review)
 
+def get_notes_for_line(filename, line):
+	if not file_is_reviewable(filename):
+		return []
+	
+	all_notes = get_notes(filename)
+	count = 0
+	notes = []
+	for note in notes:
+		start = note.review.line_start
+		end = note.review.line_end
+		if start <= line and end >= line:
+			notes.append(note)
+	
+	return notes
+
+def get_note_text_for_line(filename, line):
+	if not file_is_reviewable(filename):
+		return []
+	
+	notes = get_notes_for_line(filename, line)
+	text = []
+	for note in notes:
+		if len(text) > 0:
+			text.append("---------------------")
+		if start != end:
+			text.append("NOTE ({}-{}): {}".format(
+				start,
+				end,
+				note.note
+			))
+		else:
+			text.append("NOTE ({}): {}".format(
+				start,
+				note.note
+			))
+	
+	return text
+
 had_note = False
 note_scratch = "__THE_AUDIT_NOTE__"
+status_line_notes = True
 def show_current_notes():
 	global had_note
+	global status_line_notes
 
 	m = mode()
 
@@ -1004,48 +1044,32 @@ def show_current_notes():
 	if not file_is_reviewable(filename):
 		return
 
-	notes = get_notes(filename)
-	count = 0
-	text = []
-	for note in notes:
-		start = note.review.line_start
-		end = note.review.line_end
-		if start <= line and end >= line:
-			if count > 0:
-				text.append("---------------------")
-			if start != end:
-				text.append("NOTE ({}-{}): {}".format(
-					start,
-					end,
-					note.note
-				))
-			else:
-				text.append("NOTE ({}): {}".format(
-					start,
-					note.note
-				))
-			count += 1
+	text = get_note_text_for_line(filename, line)
 	
-	
-	if count > 0:
-		create_scratch("\n".join(text),
-			fit_to_contents=False,
-			return_to_orig=True,
-			scratch_name=note_scratch,
-			retnr=orig_bufnr,
-			wrap=True
-		)
-		had_note = True
-	elif count == 0 and buff_exists(note_scratch):
-		buff_goto(note_scratch)
-		retnr = int(vim.eval("b:retnr"))
-		if retnr != -1:
-			vim.command("close")
-			vim.command("{nr}wincmd w".format(nr=retnr))
-		#if had_note:
-			#vim.command("!redraw")
-		had_note = False
-		closed_note = True
+	if status_line_notes:
+		if len(text) > 0:
+			status = (text[0] + text[1]).replace("\n", " | ")
+			info(status)
+	else:
+		if len(text) > 0:
+			create_scratch("\n".join(text),
+				fit_to_contents=False,
+				return_to_orig=True,
+				scratch_name=note_scratch,
+				retnr=orig_bufnr,
+				wrap=True
+			)
+			had_note = True
+		elif len(text) == 0 and buff_exists(note_scratch):
+			buff_goto(note_scratch)
+			retnr = int(vim.eval("b:retnr"))
+			if retnr != -1:
+				vim.command("close")
+				vim.command("{nr}wincmd w".format(nr=retnr))
+			#if had_note:
+				#vim.command("!redraw")
+			had_note = False
+			closed_note = True
 	
 	# reselect whatever whas selected in visual mode
 	if is_visual(m) and (closed_note or had_note):
