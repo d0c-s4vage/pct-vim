@@ -48,6 +48,8 @@ will be included in reports and are considered "part of the project".
 * Todos
 	* `[t`   -   annotate the current/selected line(s) with a single-line todo
 	* `[T`   -   annotate the current/selected line(s) with a multi-line todo
+* Annotation Modification
+	* `[d`   -   delete an annotation on the current line
 * Reports/Listings
 	* `[R`   -   toggle the report of the current project
 	* `[h`   -   show a recent history of notes/reviewed source files
@@ -56,6 +58,7 @@ will be included in reports and are considered "part of the project".
 * Annotation Navigation
 	* `[n`   -   jump to the next annotation in the current file
 	* `[N`   -   jump to the previous annotation in the current file
+	* `[?`   -   display the current annotation(s) in a vertically-split window
 
 ## Notes
 
@@ -70,7 +73,7 @@ generic annotations don't contain either.
 ## Future
 
 * ability to mark files as out-of-scope
-* ability to edit/delete annotations
+* ability to edit annotations
 
 ## Screenshots
 
