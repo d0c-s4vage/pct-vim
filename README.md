@@ -25,6 +25,10 @@ Follow the steps below to initialize the database:
 		`:PctInit`
 5. Begin auditing!
 
+Be aware that the plugin treats the root dirname of the database path as
+the root of the project. Any files in subfolders of the root project path
+will be included in reports and are considered "part of the project".
+
 ## Dependencies
 
 * Vim
@@ -44,6 +48,8 @@ Follow the steps below to initialize the database:
 * Todos
 	* `[t`   -   annotate the current/selected line(s) with a single-line todo
 	* `[T`   -   annotate the current/selected line(s) with a multi-line todo
+* Annotation Modification
+	* `[d`   -   delete an annotation on the current line
 * Reports/Listings
 	* `[R`   -   toggle the report of the current project
 	* `[h`   -   show a recent history of notes/reviewed source files
@@ -52,11 +58,12 @@ Follow the steps below to initialize the database:
 * Annotation Navigation
 	* `[n`   -   jump to the next annotation in the current file
 	* `[N`   -   jump to the previous annotation in the current file
+	* `[?`   -   display the current annotation(s) in a vertically-split window
 
 ## Notes
 
 Note that the only differentiation between annotations/findings/todos is the
-existince of certain keywords in the annotation. Todos contain the word
+existence of certain keywords in the annotation. Todos contain the word
 "TODO" in the text, findings contain the word "FINDING" in the text, and
 generic annotations don't contain either.
 
@@ -66,4 +73,26 @@ generic annotations don't contain either.
 ## Future
 
 * ability to mark files as out-of-scope
-* ability to edit/delete annotations
+* ability to edit annotations
+
+## Screenshots
+
+Lines marked as reviewed
+
+![Reviewed lines](http://i.imgur.com/xN8uduB.png)
+
+A simple note/annotation
+
+![Simple note/annotation](http://i.imgur.com/SHEMVEK.png)
+
+A todo
+
+![A todo](http://i.imgur.com/F3eqsU9.png)
+
+A finding
+
+![A finding](http://i.imgur.com/zr0xoDV.png)
+
+Report and History
+
+![PCT Report and History](http://i.imgur.com/m8G7eno.png)
