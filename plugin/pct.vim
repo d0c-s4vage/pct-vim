@@ -542,6 +542,13 @@ def show_note_signs(note, filename=None):
 		sign_type = "sign_finding"
 	elif "TODO" in note.note:
 		sign_type = "sign_todo"
+	
+	try:
+		test = note.review.id
+	except:
+		warn('deleted bad note instance')
+		note.delete_instance()
+		return
 
 	for line in range(note.review.line_start, note.review.line_end+1, 1):
 		id = note.id * 20000 + count
@@ -1044,14 +1051,20 @@ def get_notes_for_line(filename, line):
 	if not file_is_reviewable(filename):
 		return []
 	
-	all_notes = get_notes(filename)
-	count = 0
-	notes = []
-	for note in all_notes:
-		start = note.review.line_start
-		end = note.review.line_end
-		if start <= line and end >= line:
-			notes.append(note)
+	try:
+		all_notes = get_notes(filename)
+		count = 0
+		notes = []
+
+		for note in all_notes:
+			start = note.review.line_start
+			end = note.review.line_end
+			if start <= line and end >= line:
+				notes.append(note)
+	except Exception as e:
+		warn("notes exist that aren't tied to a review, deleting them")
+		DB.execute_sql("DELETE FROM note where review not in (SELECT id from review)")
+
 	return notes
 
 def note_to_text(note):
@@ -1162,8 +1175,8 @@ def delete_note_on_line():
 	if len(notes) == 1:
 		choice = _input("Are you sure you want to delete the current note? (y/n)")
 		if choice[0].lower() == "y":
-			notes[0].delete_instance()
 			notes[0].review.delete_instance()
+			notes[0].delete_instance()
 			ok("Deleted note")
 			load_signs_buffer(vim.current.buffer.name)
 	
@@ -1186,8 +1199,8 @@ def delete_note_on_line():
 			err("Invalid choice")
 			return
 
-		notes[choice].delete_instance()
 		notes[choice].review.delete_instance()
+		notes[choice].delete_instance()
 		print("")
 		ok("Deleted note")
 		load_signs_buffer(vim.current.buffer.name)
