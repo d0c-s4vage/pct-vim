@@ -1,67 +1,3 @@
-" # PCT - Precise Code Tracking
-" @d0c_s4vage
-"
-" ## Intro
-"
-" This plugin is intended to assist in code auditing by enabling one to
-" annotate read-only source code from a text editor. This plugin
-" is the vim implementation. See @tmanning for the textmate implementation.
-"
-" PCT uses an sqlite3 database to store and query audited ranges of code
-" and notes that were taken/added for line ranges.
-"
-" ## Getting started
-"
-" Follow the steps below to initialize the database:
-"
-" 1. Source pct.vim
-" 2. Open a file in a project that you wish to audit
-" 3. Run the command below to initialize the database:
-" 		:PctInit
-" 4. Begin auditing!
-"
-" ## Key mappings
-"
-" * Review
-" 	* [r   -   mark the current/selected line(s) as having been reviewed
-" * Generic Comments (Annotations)
-" 	* [a   -   annotate the current/selected line(s) with a single-line generic comment
-" 	* [A   -   annotate the current/selected line(s) with a multi-line generic comment
-" * Findings
-" 	* [f   -   annotate the current/selected line(s) with a single-line finding
-" 	* [F   -   annotate the current/selected line(s) with a multi-line finding
-" * Todos
-" 	* [t   -   annotate the current/selected line(s) with a single-line todo
-" 	* [T   -   annotate the current/selected line(s) with a multi-line todo
-" * Reports/Listings
-" 	* [R   -   toggle the report of the current project
-" 	* [h   -   show a recent history of notes/reviewed source files
-" * Other
-" 	* [o   -   open the file under the cursor in a new readonly tab (useful for reports)
-" * Annotation Navigation
-" 	* [n   -   jump to the next annotation in the current file
-" 	* [N   -   jump to the previous annotation in the current file
-" 
-" ## Notes
-"
-" Note that the only differentiation between annotations/findings/todos is the
-" existince of certain keywords in the annotation. Todos contain the word
-" "TODO" in the text, findings contain the word "FINDING" in the text, and
-" generic annotations don't contain either.
-"
-" ## Known Issues
-" * sometimes there are issues when viewing existing notes while scrolling through
-" 	a split file
-"
-" ## Future
-"
-" * ability to mark files as out-of-scope
-" * ability to edit/delete annotations
-"
-
-
-" ---------------------------------------------
-" ---------------------------------------------
 
 function! DefinePct()
 python3 <<EOF
@@ -70,9 +6,11 @@ from contextlib import contextmanager
 import datetime
 import glob
 import os
+import re
 import sys
 import sqlite3
 import tempfile
+import traceback
 
 import vim
 
@@ -82,17 +20,17 @@ except ImportError as e:
 	print("Could not import peewee module, run 'pip install peewee'")
 
 class PctModels:
-	Path = None
-	Note = None
-	Review = None
+	Setting = None
 	Scope = None
+	ThreadNode = None
+	Tag = None
+	Note = None
+	Reviewed = None
+	File = None
 
-THIS_SCRIPT = vim.eval("expand('<sfile>')")
 DB = None
 DB_PATH = None
-DB_NAME = "pct.sqlite"
-
-SHOW_ANNOTATIONS = True
+DB_NAME = "pct2.sqlite"
 
 def _input(message = 'input'):
 	vim.command('call inputsave()')
@@ -126,9 +64,8 @@ def buff_puts(msg, clear=True):
 
 @contextmanager
 def restore_cursor():
-	cursor = vim.current.window.cursor
 	yield
-	vim.current.window.cursor = cursor
+	vim.command("silent! wincmd p")
 
 @contextmanager
 def v_restore_cursor():
@@ -155,6 +92,21 @@ def buffwinnr(name):
 	"""
 	"""
 	return int(vim.eval("bufwinnr('" + name + "')"))
+
+def get_buffnr(name):
+	"""
+	"""
+	return int(vim.eval("bufnr('" + name + "')"))
+
+def getline(line=None): 
+	"""
+	Return a line from the buffer named ``name``. If an actual line
+	number is not specified, the current line will be returned
+	"""
+	this_buffnr = vim.current.buffer.number
+	if line is None:
+		line,_ = vim.current.window.cursor
+	return vim.eval("getbufline({}, {})".format(this_buffnr, line))[0]
 
 def buff_close(name, delete=False):
 	"""
@@ -206,6 +158,74 @@ def norm_path(path):
 	res = reduce_path(res)
 	return res
 
+def get_setting(name, default_val=None, raw=False):
+	"""
+	Get the setting value for setting named ``name`` from the db
+	"""
+	try:
+		setting = PctModels.Setting.get(
+			PctModels.Setting.name == name
+		)
+	except:
+		if default_val is not None:
+			setting = PctModels.Setting(name=name, value=default_val)
+			setting.save()
+			return default_val
+		else:
+			return None
+	else:
+		if raw:
+			return setting
+		else:
+			return setting.value
+
+def set_setting(name, value):
+	"""
+	Set (or create) the setting named ``name`` with value ``value``
+	"""
+	setting = get_setting(name, raw=True)
+	setting.value = value
+	setting.save()
+
+def is_in_dir(dir_path, path):
+	"""
+	Return True/False if the ``path`` is found within the directory
+	``dir_path``
+	"""
+	# can't be in it if it's not a directory
+	if not os.path.isdir(dir_path):
+		return False
+
+	rel_path = os.path.relpath(path, dir_path)
+	if rel_path.startswith(".."):
+		return False
+	return True
+
+def is_file_in_scope(path):
+	"""
+	Return True/False if the path is in scope for the current project.
+
+	It is assumed that path is within the project, and has already been normalized.
+	"""
+	default_scope = get_setting("default_scope", "blacklist")
+
+	scopes = PctModels.Scope.select()
+	for scope in scopes:
+		if scope.include:
+			if scope.path == path:
+				return True
+			elif is_in_dir(scope.path, path):
+				return True
+		elif is_in_dir(scope.path, path):
+			return False
+
+	if default_scope == "blacklist":
+		# has not been blacklisted
+		return True
+	elif default_scope == "whitelist":
+		# has not been whitelisted
+		return False
+
 def file_is_reviewable(path):
 	"""
 	Return True/False if the file exists and is in the current project,
@@ -214,7 +234,7 @@ def file_is_reviewable(path):
 	if path is None:
 		return False
 
-	if isinstance(path, PctModels.Path):
+	if isinstance(path, PctModels.File):
 		return True
 
 	if path is None:
@@ -230,6 +250,10 @@ def file_is_reviewable(path):
 		return False
 	
 	if norm_path(path).startswith(".."):
+		return False
+	
+	if not is_file_in_scope(path):
+		err("not in scope")
 		return False
 	
 	return True
@@ -294,37 +318,68 @@ def create_db(dest_path):
 		class Meta:
 			database = DB
 	
-	class Path(BaseModel):
-		path = CharField(unique=True)
-		timestamp = DateTimeField(default=datetime.datetime.now)
-		line_count = IntegerField()
-	
-	class Review(BaseModel):
-		path = ForeignKeyField(Path)
-		timestamp = DateTimeField(default=datetime.datetime.now)
-		line_start = IntegerField()
-		line_end = IntegerField()
-		column_start = IntegerField(default=0)
-		column_end = IntegerField(default=0)
-
-	class Note(BaseModel):
-		path = ForeignKeyField(Path)
-		review = ForeignKeyField(Review)
-		timestamp = DateTimeField(default=datetime.datetime.now)
-		note = TextField()
+	class Setting(BaseModel):
+		name		= CharField(unique=True)
+		value		= CharField()
 	
 	class Scope(BaseModel):
-		path = ForeignKeyField(Path)
-		scope_flag = BooleanField()
+		path 		= CharField()
+		include 	= BooleanField()
+
+	class File(BaseModel):
+		path 		= CharField(unique=True)
+		line_count	= IntegerField()
 	
-	PctModels.Path = Path
-	PctModels.Review = Review
-	PctModels.Note = Note
+	class Tag(BaseModel):
+		name		= CharField()
+	
+	class ThreadNode(BaseModel):
+		file		= ForeignKeyField(File, related_name="threads")
+		line		= IntegerField()
+		tag			= ForeignKeyField(Tag, null=True, related_name="threads")
+		name		= CharField()
+		desc		= TextField()
+		parent_node	= ForeignKeyField("self", null=True, related_name="children")
+	
+	class Reviewed(BaseModel):
+		file		= ForeignKeyField(File, related_name="reviews")
+		line_start	= IntegerField() # 1-based line numbers
+		line_end	= IntegerField() # 1-based line numbers
+		created		= DateTimeField(default=datetime.datetime.now)
+	
+	class Note(BaseModel):
+		TYPE_NOTE = 0
+		TYPE_TODO = 1
+		TYPE_FINDING = 2
+
+		file		= ForeignKeyField(File, related_name="notes")
+		line_start	= IntegerField()
+		line_end	= IntegerField()
+		col_start	= IntegerField() # probably won't be used
+		col_end		= IntegerField() # probably won't be used
+		note		= TextField()
+		tag			= ForeignKeyField(Tag, null=True, related_name="notes")
+		note_type	= IntegerField() # 0-NOTE, 1-TODO, 2-FINDING
+		thread_node	= ForeignKeyField(ThreadNode, related_name="notes")
+		created		= DateTimeField(default=datetime.datetime.now)
+	
+	PctModels.Setting = Setting
 	PctModels.Scope = Scope
+	PctModels.File = File
+	PctModels.Tag = Tag
+	PctModels.ThreadNode = ThreadNode
+	PctModels.Reviewed = Reviewed
+	PctModels.Note = Note
+
+	tables = []
+	for attr_name in PctModels.__dict__:
+		attr = getattr(PctModels, attr_name)
+		if type(attr) == type(BaseModel) and issubclass(attr, BaseModel):
+			tables.append(attr)
 
 	DB.connect()
 	try:
-		DB.create_tables([Path, Review, Note, Scope])
+		DB.create_tables(tables)
 	except Exception as e:
 		if "already exists" in str(e):
 			pass
@@ -384,29 +439,344 @@ def init_db(create=True):
 		ok("found annotations database at %s" % found_db)
 		vim.command("call DefineAutoCommands()")
 
-def get_path(path, create=True):
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+
+def get_tag(name=None, create=True):
+	if name is None:
+		name = vim.eval("expand('<cword>')")
+
+	try:
+		tag = PctModels.Tag.get(
+			PctModels.Tag.name == name
+		)
+		return tag
+	except:
+		# sanity check so tags aren't being created for parens and such
+		if create and re.match(r'^[_a-zA-Z][a-zA-Z_0-9]*', name) is not None:
+			tag = PctModels.Tag(name = name)
+			tag.save()
+			return tag
+		else:
+			return None
+
+def get_file_tags():
+	curr_file_name = vim.current.buffer.name
+	curr_file = get_file(curr_file_name)
+	return curr_file.tags
+
+def get_file_notes():
+	curr_file_name = vim.current.buffer.name
+	curr_file = get_file(curr_file_name)
+	return curr_file.notes
+
+def highlight_noted_tags():
+	curr_file = vim.current.buffer.name
+	this_file = get_file(curr_file)
+	noted_tags = set()
+
+	for note in this_file.notes:
+		if note.tag is not None:
+			noted_tags.add(note.tag.name)
+	
+	for thread in this_file.threads:
+		if thread.tag is not None:
+			noted_tags.add(note.tag.name)
+	
+	regex = "\\|".join(noted_tags)
+	vim.command("match tag_is_noted /{}/".format(regex))
+
+def process_buff_enter():
+	curr_file = vim.current.buffer.name
+
+	print("processing: " + curr_file)
+	if not file_is_reviewable(curr_file):
+		return
+
+	highlight_noted_tags()
+
+	# TODO revisit this?
+	# we are AUDITING, not editing code
+	vim.command("set ro")
+	vim.command("set nomodifiable")
+
+def process_new_buffer():
+	# use this instead of `expand("%")`!!! % doens't work with BufAdd
+	curr_file = vim.eval("expand('<afile>')")
+
+	if not file_is_reviewable(curr_file):
+		return
+
+	# TODO revisit this?
+	# we are AUDITING, not editing code
+	vim.command("set ro")
+	vim.command("set nomodifiable")
+
+	# do not add files that are outside of the current project!
+	if not file_is_reviewable(curr_file):
+		return
+	
+	this_file = get_file(curr_file)
+
+def process_cursor_moved():
+	curr_file = vim.current.buffer.name
+	if not file_is_reviewable(curr_file):
+		return
+
+	tag = get_tag(create=False)
+	if tag is None:
+		return
+	
+	notes = list(tag.notes)
+	if len(notes) > 0:
+		res = ""
+		for note in tag.notes:
+			res += note.note
+		print(res)
+
+#----------
+# Threads
+#----------
+
+THREADS = {
+	# the current thread
+	"current": None,
+	
+	# used for switching between threads, not creating a new thread node
+	"last": None
+}
+
+def _curr_thread(val=None):
+	global THREADS
+	if val is None:
+		return THREADS["current"]
+	else:
+		THREADS["current"] = val
+
+def _last_thread(val=None):
+	global THREADS
+	if val is None:
+		return THREADS["last"]
+	else:
+		THREADS["last"] = val
+
+def _switch_thread(new_thread):
+	global THREADS
+	THREADS["last"] = THREADS["current"]
+	THREADS["current"] = new_thread
+
+def open_thread():
+	curr_line = getline()
+	match = re.match(r'^.*\[(\d+)\]$', curr_line)
+	if match is None:
+		return
+	thread_node_id = int(match.group(1))
+
+	new_thread = PctModels.ThreadNode.get(PctModels.ThreadNode.id == thread_node_id)
+	_switch_thread(new_thread)
+	info("switched to thread '{}'".format(new_thread.name))
+
+	bufnr = buffwinnr(new_thread.file.path)
+	if bufnr == -1:
+		vim.command("badd " + new_thread.file.path.replace(" ", "\\ "))
+		vim.command("silent! wincmd p")
+		bufnr = get_buffnr(new_thread.file.path)
+		try:
+			vim.command("b" + str(bufnr))
+		except:
+			pass
+		bufnr = buffwinnr(new_thread.file.path)
+	
+	win_goto(bufnr)
+	vim.current.window.cursor = (new_thread.line,0)
+	vim.command("silent! normal! zz<CR>")
+
+def open_thread_fold():
+	pass
+
+def close_thread_fold():
+	pass
+
+def toggle_thread_fold():
+	pass
+
+def open_all_thread_folds():
+	pass
+
+def close_all_thread_folds():
+	pass
+
+def map_threadtree_keys():
+	keymap = [
+		("jump",			["<CR>"],					open_thread),
+		("openfold",		["+", "<kPlus>", "zo"],		open_thread_fold),
+		("closefold",		["-", "<kMinus>", "zc"],	close_thread_fold),
+		("togglefold",		["o", "za"],				toggle_thread_fold),
+		("openallfolds",	["*", "<kMultiply>", "zR"],	open_all_thread_folds),
+		("closeallfolds",	["=", "zM"],				close_all_thread_folds),
+	]
+
+	for mapname, keys, func in keymap:
+		for key in keys:
+			vim.command("nnoremap <script> <silent> <buffer> {} :py3 {}()<CR>".format(
+				key,
+				func.__name__
+			))
+
+THREAD_TREE_NAME = "__PCT_THREADS__"
+def toggle_thread_tree():
+	if buff_exists(THREAD_TREE_NAME):
+		buff_close(THREAD_TREE_NAME)
+		return
+	else:
+		show_thread_tree()
+
+def show_thread_tree(return_to_orig=False):
+	root_threads = PctModels.ThreadNode.select().where(
+		PctModels.ThreadNode.parent_node == None
+	)
+
+	contents = []
+	for root_thread in root_threads:
+		if root_thread is None:
+			continue
+		contents.append(get_thread_node_lines(root_thread))
+
+	if buff_exists(THREAD_TREE_NAME):
+		win_goto(buffwinnr(THREAD_TREE_NAME))
+		buff_puts("\n".join(contents))
+		if return_to_orig:
+			vim.command("silent! wincmd p")
+	else:
+		create_scratch(
+			"\n".join(contents),
+			fit_to_contents=False,
+			return_to_orig=return_to_orig,
+			scratch_name=THREAD_TREE_NAME,
+			syntax="pct_thread_tree"
+		)
+		map_threadtree_keys()
+
+def update_thread_tree():
+	buffnr = buffwinnr(THREAD_TREE_NAME)
+	if buffnr == -1:
+		return
+	
+	#with restore_cursor():
+	show_thread_tree(return_to_orig=True)
+
+def get_thread_node_lines(node, level=0):
+	res = "{}{} ({}:{}) [{}]".format(
+		"  " * level,
+		node.name,
+		node.file.path,
+		node.line,
+		node.id
+	)
+	for child_node in node.children:
+		res += "\n" + get_thread_node_lines(child_node, level+1)
+	return res
+
+def create_thread_node(no_parent=False):
+	global THREADS
+
+	curr_tag_name = node_name = vim.eval("expand('<cword>')")
+	new_name = _input("creating thread node, name: {}. New name (return to accept)".format(node_name))
+	if new_name.strip() != "":
+		node_name = new_name
+	
+	curr_file = get_file(vim.current.buffer.name)
+	curr_line,_ = vim.current.window.cursor
+	curr_tag = get_tag(curr_tag_name)
+
+	if no_parent:
+		curr_parent = None
+	else:
+		curr_parent = _curr_thread()
+
+	thread_node = PctModels.ThreadNode(
+		file		= curr_file,
+		line		= curr_line,
+		tag			= curr_tag,
+		name		= node_name,
+		desc		= "",
+		parent_node	= curr_parent
+	)
+	thread_node.save()
+	_curr_thread(thread_node)
+
+	update_thread_tree()
+
+#----------
+# Notes
+#----------
+
+def create_note():
+	if not file_is_reviewable(vim.current.buffer.name):
+		err("file is not reviewable/real/in-scope")
+		return
+
+	curr_thread = _curr_thread()
+	if curr_thread is None:
+		create_thread_node()
+		curr_thread = _curr_thread()
+	
+	file = get_file(vim.current.buffer.name)
+	rng = vim.current.range
+	line_start = rng.start+1
+	line_end = rng.end+1
+	tag = get_tag()
+
+	with v_restore_cursor():
+		note_text = _input("Note")
+	
+	note = PctModels.Note(
+		file			= file,
+		line_start		= line_start,
+		line_end		= line_end,
+		col_start		= 0,
+		col_end			= 0,
+		note			= note_text,
+		tag				= tag,
+		note_type		= PctModels.Note.TYPE_NOTE,
+		thread_node		= curr_thread
+	)
+	note.save()
+
+	highlight_noted_tags()
+
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+# ----------------------------------------------
+
+def get_file(path, create=True):
 	"""
-	The path _should_ be a string, but in case it's an instance of a Path ORM
+	The path _should_ be a string, but in case it's an instance of a File ORM
 	object, just return it.
 
 	MAKE SURE THE PATH IS RELATIVE TO THE PROJECT ROOT!
 	"""
-	if isinstance(path, PctModels.Path):
+	if isinstance(path, PctModels.File):
 		return path
 	
 	# normalize the path
 	normd_path = norm_path(path)
 
 	try:
-		existing_path = PctModels.Path.get(PctModels.Path.path == normd_path)
+		existing_path = PctModels.File.get(PctModels.File.path == normd_path)
 		return existing_path
 	except:
 		if create:
-			return add_path(path)
+			return add_file(path)
 		else:
 			return None
 
-def add_path(path):
+def add_file(path):
 	"""
 	"""
 	# TODO - need to make sure all paths are relative to the database, else
@@ -420,7 +790,7 @@ def add_path(path):
 		if data[-1] == "\n":
 			line_count -= 1
 
-	new_path = PctModels.Path(path=path, line_count=line_count)
+	new_path = PctModels.File(path=path, line_count=line_count)
 	new_path.save()
 
 	update_status(vim.current.buffer.name)
@@ -572,7 +942,7 @@ def update_status(bufname=None):
 		else:
 			status = get_status(bufname, no_filename=True)
 			new_status = "%f - " + status.replace("%", "%%")
-			new_status = new_status.replace(" ", "\\ ")
+			new_status = new_status.replace(" " "\\, ")
 
 		vim.command("set statusline=" + new_status)
 	except:
@@ -627,7 +997,7 @@ def load_signs_all_buffers():
 # ----------------------------------------
 # ----------------------------------------
 
-def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_name="__THE_AUDIT__", retnr=-1, set_buftype=True, width=50, wrap=False, modify=False):
+def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_name="__THE_AUDIT__", retnr=-1, set_buftype=True, width=50, wrap=False, modify=False, syntax=None):
 	if buff_exists(scratch_name):
 		buff_close(scratch_name, delete=True)
 
@@ -670,8 +1040,12 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 	if not modify:
 		vim.command("setlocal nomodifiable")
 	
+	if syntax is not None:
+		vim.command("set syntax=" + syntax)
+	
 	if return_to_orig:
-		win_goto(orig_buffnr)
+		vim.command("silent! wincmd p")
+		#win_goto(orig_buffnr)
 
 def multi_input(placeholder):
 	tmp = tempfile.NamedTemporaryFile(delete=False)
@@ -767,13 +1141,13 @@ def get_status(path, no_filename=False, filename_max=0, raw=False):
 def _report_info():
 	statuses = []
 	max_len = 0
-	for path in PctModels.Path.select():
+	for path in PctModels.File.select():
 		path_len = len(rev_norm_path(path.path))
 		if path_len > max_len:
 			max_len = path_len
 
 	existing = {}
-	for path in PctModels.Path.select():
+	for path in PctModels.File.select():
 		status = get_status(path, filename_max=max_len, raw=True)
 
 		c = status["info"]["coverage"]
@@ -837,7 +1211,7 @@ def toggle_report():
 	
 def report():
 	restore = (vim.current.buffer.name is not None and os.path.basename(vim.current.buffer.name) == report_name)
-	line,col = vim.current.window.cursor
+	linecol, = vim.current.window.cursor
 
 	report_info = _report_info()
 	text = [
@@ -867,7 +1241,7 @@ def report():
 		count += 1
 
 	if restore:
-		vim.current.window.cursor = (line,col)
+		vim.current.window.cursor = (linecol),
 
 		# for some reason vim still loses the current position in the buffer
 		# (if you go up/down a line, it jumps to the start of the line instead
@@ -941,7 +1315,7 @@ def review_current_line():
 		return
 
 	# not 0-based!
-	line,_ = vim.current.window.cursor
+	line_, = vim.current.window.cursor
 	_review_lines(vim.current.buffer.name, line, line)
 
 def note_selection(prefix="", prompt="note", multi=False, start=None, end=None):
@@ -996,7 +1370,7 @@ def note_current_line(prefix="", prompt="note", multi=False, placeholder=""):
 		return
 
 	# not 0-based!
-	line,_ = vim.current.window.cursor
+	line_, = vim.current.window.cursor
 	curr_file = vim.current.buffer.name
 
 	if len(prefix) > 0:
@@ -1034,7 +1408,7 @@ def cursor_moved():
 
 	if is_auditing:
 		filename = vim.current.buffer.name
-		line,_ = vim.current.window.cursor
+		line_, = vim.current.window.cursor
 
 		reviews = get_reviews(filename)
 		found_review = False
@@ -1107,7 +1481,7 @@ def show_current_notes(status_line_notes_override=False):
 
 	m = mode()
 
-	line,_ = vim.current.window.cursor
+	line_, = vim.current.window.cursor
 	filename = vim.current.buffer.name
 	orig_bufnr = winnr()
 	closed_note = False
@@ -1308,12 +1682,13 @@ call DefinePct()
 function! DefineAutoCommands()
 	augroup Pct!
 		autocmd!
-		autocmd BufReadPre * py3 set_initial_review_mark()
-		autocmd BufAdd * py3 load_signs_new_buffer()
-		autocmd BufEnter * py3 buff_enter()
-		autocmd BufWritePost * call MaybeSaveNote()
-		autocmd VimEnter * py3 load_signs_all_buffers()
-		autocmd CursorMoved * py3 cursor_moved()
+		"autocmd BufReadPre * py3 set_initial_review_mark()
+		autocmd BufAdd * py3 process_new_buffer()
+		autocmd BufEnter * py3 process_buff_enter()
+		autocmd CursorMoved * py3 process_cursor_moved()
+		"autocmd BufWritePost * call MaybeSaveNote()
+		"autocmd VimEnter * py3 load_signs_all_buffers()
+		"autocmd CursorMoved * py3 cursor_moved()
 	augroup END
 endfunction
 
@@ -1322,67 +1697,75 @@ py3 init_db(create=False)
 " ---------------------------------------------
 " ---------------------------------------------
 
-" mark the selected line as as reviewed
-vmap [r :py3 review_selection()<CR> 
-nmap [r :py3 review_current_line()<CR>
+nmap [t :PctThreadCreate<CR>
+nmap [T :py3 toggle_thread_tree()<CR>
+nmap [a :py3 create_note()<CR>
 
-" mark from last mark up the cursor as reviewed
-nmap [u mx'cV`x[rmc
+" " mark the selected line as as reviewed
+" vmap [r :py3 review_selection()<CR> 
+" nmap [r :py3 review_current_line()<CR>
+" 
+" " mark from last mark up the cursor as reviewed
+" nmap [u mx'cV`x[rmc
+" 
+" " annotate the selected lines
+" vmap [a :py3 note_selection()<CR> 
+" nmap [a :py3 note_current_line()<CR>
+" vmap [A :py3 note_selection(multi=True)<CR> 
+" nmap [A :py3 note_current_line(multi=True)<CR>
+" 
+" " add a finding for the selected lines
+" vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR> 
+" nmap [f :py3 note_current_line(prefix="FINDING", prompt="finding")<CR>
+" vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
+" nmap [F :py3 note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
+" 
+" nmap [d :py3 delete_note_on_line()<CR>
+" nmap [e :py3 edit_note_on_line()<CR>
+" 
+" " add a todo for the selected lines
+" vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR> 
+" nmap [t :py3 note_current_line(prefix="TODO", prompt="todo")<CR>
+" vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
+" nmap [T :py3 note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
+" 
+" " toggle auditing (q like record)
+" " NOTE - not really recommended, is more of an experiment
+" " map [q :py3 toggle_audit()<CR>
+" 
+" nmap [H :py3 toggle_annotations()<CR>
+" 
+" " show the current report
+" nmap [R :py3 toggle_report()<CR>
+" 
+" " show all notes containing the current line
+" " this should not be needed, as the current line's notes are automatically
+" " displayed
+" map [? :py3 show_current_notes(status_line_notes_override=True)<CR>
+" 
+" " show a recent history
+" map [h :py3 toggle_history()<CR>
+" 
+" " open the filepath under the cursor in a new tab
+" map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>
+" 
+" " jump to the previous note
+" nmap <silent> [n :py3 jump_to_note()<CR>
+" nmap <silent> [N :py3 jump_to_note(direction=-1)<CR>
 
-" annotate the selected lines
-vmap [a :py3 note_selection()<CR> 
-nmap [a :py3 note_current_line()<CR>
-vmap [A :py3 note_selection(multi=True)<CR> 
-nmap [A :py3 note_current_line(multi=True)<CR>
+command! -nargs=0 PctThreadCreate py3 create_thread_node()
 
-" add a finding for the selected lines
-vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR> 
-nmap [f :py3 note_current_line(prefix="FINDING", prompt="finding")<CR>
-vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
-nmap [F :py3 note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
-
-nmap [d :py3 delete_note_on_line()<CR>
-nmap [e :py3 edit_note_on_line()<CR>
-
-" add a todo for the selected lines
-vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR> 
-nmap [t :py3 note_current_line(prefix="TODO", prompt="todo")<CR>
-vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
-nmap [T :py3 note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
-
-" toggle auditing (q like record)
-" NOTE - not really recommended, is more of an experiment
-" map [q :py3 toggle_audit()<CR>
-
-nmap [H :py3 toggle_annotations()<CR>
-
-" show the current report
-nmap [R :py3 toggle_report()<CR>
-
-" show all notes containing the current line
-" this should not be needed, as the current line's notes are automatically
-" displayed
-map [? :py3 show_current_notes(status_line_notes_override=True)<CR>
-
-" show a recent history
-map [h :py3 toggle_history()<CR>
-
-" open the filepath under the cursor in a new tab
-map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>
-
-" jump to the previous note
-nmap <silent> [n :py3 jump_to_note()<CR>
-nmap <silent> [N :py3 jump_to_note(direction=-1)<CR>
-
-command! -nargs=0 PctReport py3 report()
-command! -nargs=0 PctNotes py3 notes()
-command! -nargs=0 PctAudit py3 toggle_audit()
-command! -nargs=0 PctInit py3 init_db(True)
+" command! -nargs=0 PctReport py3 report()
+" command! -nargs=0 PctNotes py3 notes()
+" command! -nargs=0 PctAudit py3 toggle_audit()
+" command! -nargs=0 PctInit py3 init_db(True)
 
 " always show the status of files
 set laststatus=2
 
 function! DefineHighlights()
+	highlight tag_is_noted cterm=underline,bold
+
 	highlight hl_finding ctermfg=red ctermbg=black
 	highlight hl_annotated_line cterm=bold ctermbg=black
 	highlight hl_todo ctermfg=yellow ctermbg=black
