@@ -19,7 +19,14 @@ try:
 except ImportError as e:
 	print("Could not import peewee module, run 'pip install peewee'")
 
+try:
+	import arrow
+except ImportError as e:
+	arrow = None
+	print("Could not import arrow, run 'pip install arrow' for pretty date-time output")
+
 class PctModels:
+	FileAccess = None
 	Setting = None
 	Scope = None
 	ThreadNode = None
@@ -33,10 +40,19 @@ DB_PATH = None
 DB_NAME = "pct2.sqlite"
 
 def _input(message = 'input'):
-	vim.command('call inputsave()')
-	vim.command("let user_input = input('" + message + ": ')")
-	vim.command('call inputrestore()')
-	return vim.eval('user_input')
+	try:
+		vim.command('call inputsave()')
+		vim.command("let user_input = input('" + message + ": ')")
+		vim.command('call inputrestore()')
+		return vim.eval('user_input')
+	except KeyboardInterrupt as e:
+		return None
+
+def human_date(dt):
+	if arrow is None:
+		return str(dt)
+	else:
+		return arrow.get(dt).humanize()
 
 class Colors:
 	HEADER = '\033[95m'
@@ -93,6 +109,22 @@ def buffwinnr(name):
 	"""
 	return int(vim.eval("bufwinnr('" + name + "')"))
 
+def get_range(visual=None):
+	"""Get the current start/stop line/col numbers
+	"""
+	if visual is None:
+		# doesn't always work
+		visual = is_visual()
+
+	type_ = "'" if visual else "."
+	start_cmd = 'getpos("{}<")'.format(type_)
+	start_info = vim.eval(start_cmd)
+	stop_cmd = 'getpos("{}>")'.format(type_)
+	stop_info = vim.eval(stop_cmd)
+	_,start_line,start_col,_ = start_info
+	_,stop_line,stop_col,_ = stop_info
+	return (start_line, stop_line, start_col, stop_col)
+
 def get_buffnr(name):
 	"""
 	"""
@@ -118,7 +150,10 @@ def buff_close(name, delete=False):
 	vim.command("execute '{nr}wincmd w'".format(nr=bufnr))
 
 	if delete:
-		vim.command("bd!")
+		try:
+			vim.command("bd!")
+		except:
+			pass
 	else:
 		vim.command("close")
 
@@ -321,31 +356,42 @@ def create_db(dest_path):
 	class Setting(BaseModel):
 		name		= CharField(unique=True)
 		value		= CharField()
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
 	class Scope(BaseModel):
 		path 		= CharField()
 		include 	= BooleanField()
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 
 	class File(BaseModel):
 		path 		= CharField(unique=True)
 		line_count	= IntegerField()
+		created		= DateTimeField(default=datetime.datetime.utcnow)
+	
+	class FileAccess(BaseModel):
+		file		= ForeignKeyField(File, related_name="accesses")
+		line		= IntegerField()
+		col			= IntegerField()
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
 	class Tag(BaseModel):
 		name		= CharField()
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
 	class ThreadNode(BaseModel):
-		file		= ForeignKeyField(File, related_name="threads")
+		file		= ForeignKeyField(File, related_name="threads", null=True)
 		line		= IntegerField()
 		tag			= ForeignKeyField(Tag, null=True, related_name="threads")
 		name		= CharField()
 		desc		= TextField()
 		parent_node	= ForeignKeyField("self", null=True, related_name="children")
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
 	class Reviewed(BaseModel):
 		file		= ForeignKeyField(File, related_name="reviews")
 		line_start	= IntegerField() # 1-based line numbers
 		line_end	= IntegerField() # 1-based line numbers
-		created		= DateTimeField(default=datetime.datetime.now)
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
 	class Note(BaseModel):
 		TYPE_NOTE = 0
@@ -361,8 +407,9 @@ def create_db(dest_path):
 		tag			= ForeignKeyField(Tag, null=True, related_name="notes")
 		note_type	= IntegerField() # 0-NOTE, 1-TODO, 2-FINDING
 		thread_node	= ForeignKeyField(ThreadNode, related_name="notes")
-		created		= DateTimeField(default=datetime.datetime.now)
+		created		= DateTimeField(default=datetime.datetime.utcnow)
 	
+	PctModels.FileAccess = FileAccess
 	PctModels.Setting = Setting
 	PctModels.Scope = Scope
 	PctModels.File = File
@@ -376,7 +423,7 @@ def create_db(dest_path):
 		attr = getattr(PctModels, attr_name)
 		if type(attr) == type(BaseModel) and issubclass(attr, BaseModel):
 			tables.append(attr)
-
+		
 	DB.connect()
 	try:
 		DB.create_tables(tables)
@@ -421,6 +468,8 @@ def prompt_for_db_path():
 def init_db(create=True):
 	"""
 	"""
+	global THREAD_TREE_INFO
+
 	found_db = None
 	if not create:
 		found_db = find_db()
@@ -439,6 +488,25 @@ def init_db(create=True):
 		ok("found annotations database at %s" % found_db)
 		vim.command("call DefineAutoCommands()")
 
+		try:
+			root = PctModels.ThreadNode.get(
+				PctModels.ThreadNode.name == "ROOT" and PctModels.ThreadNode.parent_node == None
+			)
+		except:
+			root = PctModels.ThreadNode(
+				name		= "ROOT",
+				parent_node	= None,
+				tag			= None,
+				file		= None,
+				line		= -1,
+				desc		= ""
+			)
+			root.save()
+
+		# explicitly expand the root as the default
+		THREAD_TREE_INFO[root.id] = "expand"
+		_curr_thread(root)
+
 # ----------------------------------------------
 # ----------------------------------------------
 # ----------------------------------------------
@@ -446,6 +514,9 @@ def init_db(create=True):
 # ----------------------------------------------
 
 def get_tag(name=None, create=True):
+	if name is not None and isinstance(name, PctModels.Tag):
+		return name
+
 	if name is None:
 		name = vim.eval("expand('<cword>')")
 
@@ -474,29 +545,34 @@ def get_file_notes():
 	return curr_file.notes
 
 def highlight_noted_tags():
-	curr_file = vim.current.buffer.name
-	this_file = get_file(curr_file)
-	noted_tags = set()
+	# we basically want all tags with notes/threads
 
-	for note in this_file.notes:
-		if note.tag is not None:
-			noted_tags.add(note.tag.name)
+	tags = set()
 	
-	for thread in this_file.threads:
-		if thread.tag is not None:
-			noted_tags.add(note.tag.name)
-	
-	regex = "\\|".join(noted_tags)
+	for note in PctModels.Note.select():
+		if note.tag is None:
+			continue
+		tags.add(note.tag.name)
+
+	if len(tags) == 0:
+		return
+
+	regex = "\\v({})".format(
+		"|".join(["<{}>".format(tag) for tag in tags])
+	)
 	vim.command("match tag_is_noted /{}/".format(regex))
 
 def process_buff_enter():
 	curr_file = vim.current.buffer.name
 
-	print("processing: " + curr_file)
 	if not file_is_reviewable(curr_file):
 		return
 
+	file_ = get_file()
+
 	highlight_noted_tags()
+	show_current_notes()
+	show_file_signs(file_)
 
 	# TODO revisit this?
 	# we are AUDITING, not editing code
@@ -519,12 +595,17 @@ def process_new_buffer():
 	if not file_is_reviewable(curr_file):
 		return
 	
-	this_file = get_file(curr_file)
+	this_file = get_file(curr_file, create_access=True)
+	show_file_signs(this_file)
 
 def process_cursor_moved():
 	curr_file = vim.current.buffer.name
+
 	if not file_is_reviewable(curr_file):
 		return
+	
+	show_current_notes()
+	return
 
 	tag = get_tag(create=False)
 	if tag is None:
@@ -536,6 +617,58 @@ def process_cursor_moved():
 		for note in tag.notes:
 			res += note.note
 		print(res)
+
+#----------
+# History
+#----------
+
+HISTORY_NAME = "__PCT_HISTORY__"
+def toggle_history():
+	if buff_exists(HISTORY_NAME):
+		buff_close(HISTORY_NAME)
+		return
+	else:
+		show_history()
+
+def show_history(limit=100, reverse=True):
+	all_items = \
+		list(PctModels.Note.select()) + \
+		list(PctModels.Reviewed.select()) + \
+		list(PctModels.ThreadNode.select()) + \
+		list(PctModels.FileAccess.select())
+	
+	output = []
+	sorted_items = sorted(all_items, key=lambda x: x.created, reverse=reverse)
+	for item in sorted_items:
+		line = getattr(item, "line", None)
+		if line is None:
+			line = getattr(item, "line_start", None)
+		if item.file is None:
+			continue
+		output.append(
+			"++ {}{} - {} [{}]".format(
+				rev_norm_path(item.file.path),
+				":{}".format(line) if line is not None else "",
+				item.__class__.__name__,
+				item.id
+			)
+		)
+		output.append("    " + human_date(item.created))
+		if isinstance(item, PctModels.Note):
+			if item.tag is not None:
+				output.append("    tag: {}".format(item.tag.name))
+			output.append("\n".join("    {}".format(x) for x in item.note.split("\n")))
+	
+	create_scratch(
+		"\n".join(output),
+		fit_to_contents=False,
+		return_to_orig=False,
+		scratch_name=HISTORY_NAME,
+		syntax="pct_notes",
+		wrap=False
+	)
+
+	vim.command("normal! gg")
 
 #----------
 # Threads
@@ -568,50 +701,99 @@ def _switch_thread(new_thread):
 	THREADS["last"] = THREADS["current"]
 	THREADS["current"] = new_thread
 
-def open_thread():
-	curr_line = getline()
-	match = re.match(r'^.*\[(\d+)\]$', curr_line)
+def get_thread_from_tree(line=None):
+	if line is None:
+		line = getline()
+	match = re.match(r'^.*\[(\d+)\]$', line)
 	if match is None:
 		return
 	thread_node_id = int(match.group(1))
 
 	new_thread = PctModels.ThreadNode.get(PctModels.ThreadNode.id == thread_node_id)
+	return new_thread
+
+def switch_thread():
+	new_thread = get_thread_from_tree()
 	_switch_thread(new_thread)
+	update_thread_tree_highlight()
+
 	info("switched to thread '{}'".format(new_thread.name))
 
-	bufnr = buffwinnr(new_thread.file.path)
+	return new_thread
+
+def open_thread_stay():
+	open_thread()
+	vim.command("silent! wincmd p")
+
+def open_thread():
+	new_thread = switch_thread()
+
+	# should only be possible for the root node
+	if new_thread.file is None:
+		return
+
+	rel_path = rev_norm_path(new_thread.file.path)
+	bufnr = buffwinnr(rel_path)
 	if bufnr == -1:
-		vim.command("badd " + new_thread.file.path.replace(" ", "\\ "))
+		vim.command("badd " + rel_path.replace(" ", "\\ "))
 		vim.command("silent! wincmd p")
-		bufnr = get_buffnr(new_thread.file.path)
+		bufnr = get_buffnr(rel_path)
 		try:
 			vim.command("b" + str(bufnr))
 		except:
 			pass
-		bufnr = buffwinnr(new_thread.file.path)
+		bufnr = buffwinnr(rel_path)
 	
 	win_goto(bufnr)
 	vim.current.window.cursor = (new_thread.line,0)
 	vim.command("silent! normal! zz<CR>")
 
 def open_thread_fold():
-	pass
+	global THREAD_TREE_INFO
+
+	thread = get_thread_from_tree()
+	THREAD_TREE_INFO[thread.id] = "expand"
+
+	update_thread_tree()
 
 def close_thread_fold():
-	pass
+	global THREAD_TREE_INFO
+
+	thread = get_thread_from_tree()
+	THREAD_TREE_INFO[thread.id] = "collapse"
+
+	update_thread_tree()
 
 def toggle_thread_fold():
-	pass
+	global THREAD_TREE_INFO
+
+	thread = get_thread_from_tree()
+	if THREAD_TREE_INFO.setdefault(thread.id, "default") in ["collapse", "default"]:
+		open_thread_fold()
+	else:
+		close_thread_fold()
 
 def open_all_thread_folds():
-	pass
+	for k in THREAD_TREE_INFO.keys():
+		THREAD_TREE_INFO[k] = "expand"
+
+	update_thread_tree()
 
 def close_all_thread_folds():
+	for k in THREAD_TREE_INFO.keys():
+		THREAD_TREE_INFO[k] = "collapse"
+
+	update_thread_tree()
+
+def show_thread_notes():
 	pass
 
 def map_threadtree_keys():
 	keymap = [
+		("thread notes",	["[n"],						show_thread_notes),
 		("jump",			["<CR>"],					open_thread),
+		("jump-stay",		["<SPACE>"],				open_thread_stay),
+		("switch",			["<TAB>"],					switch_thread),
 		("openfold",		["+", "<kPlus>", "zo"],		open_thread_fold),
 		("closefold",		["-", "<kMinus>", "zc"],	close_thread_fold),
 		("togglefold",		["o", "za"],				toggle_thread_fold),
@@ -634,7 +816,11 @@ def toggle_thread_tree():
 	else:
 		show_thread_tree()
 
+# defaults to all nodes being collapsed
+THREAD_TREE_INFO = {}
 def show_thread_tree(return_to_orig=False):
+	global THREAD_TREE_INFO
+
 	root_threads = PctModels.ThreadNode.select().where(
 		PctModels.ThreadNode.parent_node == None
 	)
@@ -656,9 +842,22 @@ def show_thread_tree(return_to_orig=False):
 			fit_to_contents=False,
 			return_to_orig=return_to_orig,
 			scratch_name=THREAD_TREE_NAME,
-			syntax="pct_thread_tree"
+			syntax="pct_thread_tree",
+			window_pos="left",
+			#width=15, # actual number of vertical lines
+			#vertical=False
 		)
 		map_threadtree_keys()
+	
+	update_thread_tree_highlight()
+
+def update_thread_tree_highlight():
+	curr_thread = _curr_thread()
+	vim.command("match none")
+	vim.command("match current_thread /\\v{}.*\\[{}\\]/".format(
+		curr_thread.name,
+		curr_thread.id
+	))
 
 def update_thread_tree():
 	buffnr = buffwinnr(THREAD_TREE_NAME)
@@ -666,18 +865,53 @@ def update_thread_tree():
 		return
 	
 	#with restore_cursor():
-	show_thread_tree(return_to_orig=True)
+	if buffnr == buffwinnr(vim.current.buffer.name):
+		cursor = vim.current.window.cursor
+		show_thread_tree(return_to_orig=False)
+		vim.current.window.cursor = cursor
+	else:
+		show_thread_tree(return_to_orig=True)
+	
+	update_thread_tree_highlight()
+
+def is_in_curr_thread_path(thread_node):
+	curr_node = _curr_thread()
+	curr_node = curr_node.parent_node
+	while curr_node is not None and curr_node.parent_node is not None:
+		if curr_node.id == thread_node.id:
+			return True
+		curr_node = curr_node.parent_node
+	return False
 
 def get_thread_node_lines(node, level=0):
-	res = "{}{} ({}:{}) [{}]".format(
-		"  " * level,
-		node.name,
-		node.file.path,
-		node.line,
-		node.id
-	)
-	for child_node in node.children:
-		res += "\n" + get_thread_node_lines(child_node, level+1)
+	if node.children.count() == 0:
+		symbol = " "
+		expand_it = False
+
+	elif is_in_curr_thread_path(node) or THREAD_TREE_INFO.setdefault(node.id, "default") == "expand":
+		expand_it = True
+		symbol = "▼"
+
+	# if it's been explicitly set to be collapsed, don't expand it
+	elif THREAD_TREE_INFO.setdefault(node.id, "default") in ["collapse", "default"]:
+		expand_it = False
+		symbol = "▶"
+
+	if node.file is None and node.name == "ROOT":
+		res = "{} ROOT [{}]".format(symbol, node.id)
+	else:
+		res = "{}{} {} ({}:{}) [{}]".format(
+			"  " * level,
+			symbol,
+			node.name,
+			node.file.path,
+			node.line,
+			node.id
+		)
+	
+	if expand_it:
+		for child_node in node.children:
+			res += "\n" + get_thread_node_lines(child_node, level+1)
 	return res
 
 def create_thread_node(no_parent=False):
@@ -685,12 +919,15 @@ def create_thread_node(no_parent=False):
 
 	curr_tag_name = node_name = vim.eval("expand('<cword>')")
 	new_name = _input("creating thread node, name: {}. New name (return to accept)".format(node_name))
+	if new_name is None:
+		return
 	if new_name.strip() != "":
 		node_name = new_name
 	
 	curr_file = get_file(vim.current.buffer.name)
 	curr_line,_ = vim.current.window.cursor
-	curr_tag = get_tag(curr_tag_name)
+	#curr_tag = get_tag(curr_tag_name)
+	curr_tag = None
 
 	if no_parent:
 		curr_parent = None
@@ -711,10 +948,167 @@ def create_thread_node(no_parent=False):
 	update_thread_tree()
 
 #----------
+# Reviews
+#----------
+
+def mark_reviewed(selection=False):
+	file_ = get_file()
+	start_line,end_line,_,_ = get_range(visual=selection)
+
+	reviewed = PctModels.Reviewed(
+		file		= file_,
+		line_start	= start_line,
+		line_end	= end_line
+	)
+	reviewed.save()
+	show_file_signs(file_)
+
+#----------
 # Notes
 #----------
 
-def create_note():
+NOTES_NAME = "__PCT_INFO__"
+had_note = False
+def show_current_notes():
+	global had_note
+	closed_note = False
+
+	# need to cache this since the mode may change after creating the
+	# scratch buffer
+	m = mode()
+
+	line,_ = vim.current.window.cursor
+	file = get_file()
+
+	output = get_line_notes() + get_tag_notes()
+	
+	if len(output) > 0:
+		create_scratch(
+			"\n".join(output),
+			fit_to_contents=False,
+			return_to_orig=True,
+			scratch_name=NOTES_NAME,
+			wrap=False,
+			syntax="pct_notes"
+		)
+		had_note = True
+	elif buff_exists(NOTES_NAME):
+		buff_goto(NOTES_NAME)
+		vim.command("close")
+		vim.command("wincmd p")
+		had_note = False
+		closed_note = True
+	
+	if is_visual(m) and (closed_note or had_note):
+		vim.command("silent! normal! gv")
+
+def get_line_notes():
+	file = get_file()
+	curr_line,curr_col = vim.current.window.cursor
+
+	res = []
+	for note in file.notes:
+		if note.tag is None and note.line_start  <= curr_line <= note.line_end:
+			if len(res) == 0:
+				res.append("[notes from annotated lines]")
+			res.append("++ lines {}-{}:\n{}\n".format(
+				note.line_start,
+				note.line_end,
+				note.note
+			))
+	
+	return res
+
+def get_tag_notes():
+	res = []
+
+	tag = get_tag(create=False)
+	if tag is not None:
+		notes = list(tag.notes)
+		if len(notes) > 0:
+			res.append("[tag '{}' notes]".format(tag.name))
+
+			for note in notes:
+				res.append("++ {}:{}\n{}".format(
+					rev_norm_path(note.file.path),
+					note.line_start,
+					"\n".join(["   {}".format(x) for x in note.note.split("\n")])
+				))
+	return res
+
+def show_file_signs(file=None):
+	if file is None:
+		file == get_file()
+
+	if file.reviews.count() == 0 and file.notes.count() == 0 and file.threads.count() == 0:
+		return
+	
+	id_start = 1000
+	for review in file.reviews:
+		for lineno in range(review.line_start, review.line_end+1):
+			show_sign(id_start, "sign_reviewed", lineno)
+			id_start += 1
+
+	for thread in file.threads:
+		show_sign(id_start, "sign_thread_node", thread.line)
+		id_start += 1
+
+	for note in file.notes:
+		for lineno in range(note.line_start, note.line_end+1):
+			if note.tag is not None:
+				continue
+			switch = {
+				PctModels.Note.TYPE_NOTE: "sign_note",
+				PctModels.Note.TYPE_TODO: "sign_todo",
+				PctModels.Note.TYPE_FINDING: "sign_finding",
+			}
+			show_sign(id_start, switch[note.note_type], lineno)
+			id_start += 1
+
+def add_note(path, line_start, line_end, note="", col_start=0, col_end=0, tag=None):
+	"""
+	"""
+	file = get_file(path)
+	if tag is not None and not isinstance(tag, PctModels.Tag):
+		tag = get_tag(tag)
+
+	new_note = PctModels.Note(
+		file			= file,
+		line_start		= line_start,
+		line_end		= line_end,
+		note			= note,
+		col_start		= col_start,
+		col_end			= col_end,
+		tag				= tag,
+		note_type		= PctModels.Note.TYPE_NOTE,
+		thread_node		= _curr_thread()
+	)
+	new_note.save()
+
+	highlight_noted_tags()
+	show_current_notes()
+	show_file_signs(file)
+
+	return new_note
+
+def save_note_from_buffer():
+	line_start = int(vim.eval("b:line_start"))
+	line_end = int(vim.eval("b:line_end"))
+	col_start = int(vim.eval("b:col_start"))
+	col_end = int(vim.eval("b:col_end"))
+	bufname = vim.eval("b:note_bufname")
+	tag = vim.eval("b:tag")
+
+	with open(vim.current.buffer.name, "r") as f:
+		text = f.read()
+
+	new_note = add_note(bufname, line_start, line_end, text, col_start, col_end, tag=tag)
+	retnr = int(vim.eval("b:retnr"))
+	vim.command("close")
+	if retnr != -1:
+		vim.command("{nr}wincmd w".format(nr=retnr))
+
+def create_note(selection=False, one_line=True):
 	if not file_is_reviewable(vim.current.buffer.name):
 		err("file is not reviewable/real/in-scope")
 		return
@@ -725,28 +1119,93 @@ def create_note():
 		curr_thread = _curr_thread()
 	
 	file = get_file(vim.current.buffer.name)
-	rng = vim.current.range
-	line_start = rng.start+1
-	line_end = rng.end+1
-	tag = get_tag()
+	line_start,line_end,col_start,col_end = get_range(visual=selection)
 
-	with v_restore_cursor():
-		note_text = _input("Note")
+	print("[{},{}] - [{},{}]".format(
+		line_start, col_start,
+		line_end, col_end
+	))
+
+	if selection:
+		tag = None
+	else:
+		tag = get_tag()
+
+	if one_line:
+		with v_restore_cursor():
+			note_text = _input("Note")
+		if note_text is None:
+			return
+		
+		add_note(file, line_start, line_end, note_text, col_start, col_end, tag)
+	else:
+		name = vim.current.buffer.name
+		commands = [
+			"let b:new_note = 1",
+			"let b:line_start = {start}".format(start=line_start),
+			"let b:line_end = {end}".format(end=line_end),
+			"let b:col_start = {start}".format(start=col_start),
+			"let b:col_end = {end}".format(end=col_end),
+			"let b:note_bufname = '{name}'".format(name=name),
+			"let b:retnr = " + str(winnr())
+		]
+		if tag is not None:
+			commands.append("let b:tag = '{}'".format(tag.name))
+		else:
+			commands.append("let b:tag = ''")
+		note_text = multi_input("Note: ")
+		vim.command(" | ".join(commands))
+		vim.command("normal! $a")
+
+def jump_to_note(down=True, curr_line=None, curr_col=1):
+	"""
+	Jump to the next note in the file
+	"""
+	if not file_is_reviewable(vim.current.buffer.name):
+		return
+
+	file_ = get_file()
+
+	if curr_line is None:
+		curr_line,curr_col = vim.current.window.cursor
+
+	notes = file_.notes
+	# searching down
+	if down:
+		notes = sorted(notes, key=lambda n: (n.line_start * 100000 + n.col_start))
+	else:
+		notes = sorted(notes, key=lambda n: (n.line_end * 100000 + n.col_end), reverse=True)
 	
-	note = PctModels.Note(
-		file			= file,
-		line_start		= line_start,
-		line_end		= line_end,
-		col_start		= 0,
-		col_end			= 0,
-		note			= note_text,
-		tag				= tag,
-		note_type		= PctModels.Note.TYPE_NOTE,
-		thread_node		= curr_thread
-	)
-	note.save()
+	dest_line = None
+	dest_col = None
+	for note in notes:
+		start = note.line_start
+		start_col = note.col_start
+		end = note.line_end
+		end_col = note.col_end
+		if start_col == 0:
+			start_col = 1
+		if end_col == 0:
+			end_col = 1
 
-	highlight_noted_tags()
+		if (down and start > curr_line) or (down and curr_line == start and start_col > curr_col):
+			dest_line = start
+			dest_col = start_col
+			break
+		elif (not down and end < curr_line) or (not down and end == curr_line and end_col < curr_col):
+			dest_line = end
+			dest_col = end_col
+			break
+
+	if dest_line is not None:
+		vim.current.window.cursor = (dest_line,dest_col)
+		show_current_notes()
+	elif dest_line is None and len(notes) > 0:
+		warn("wrapped to next note")
+		if down:
+			jump_to_note(down, curr_line=0)
+		else:
+			jump_to_note(down, curr_line=len(vim.current.buffer))
 
 # ----------------------------------------------
 # ----------------------------------------------
@@ -754,7 +1213,7 @@ def create_note():
 # ----------------------------------------------
 # ----------------------------------------------
 
-def get_file(path, create=True):
+def get_file(path=None, create=True, create_access=False):
 	"""
 	The path _should_ be a string, but in case it's an instance of a File ORM
 	object, just return it.
@@ -763,18 +1222,30 @@ def get_file(path, create=True):
 	"""
 	if isinstance(path, PctModels.File):
 		return path
+	if path is None:
+		path = vim.current.buffer.name
 	
 	# normalize the path
 	normd_path = norm_path(path)
 
 	try:
-		existing_path = PctModels.File.get(PctModels.File.path == normd_path)
-		return existing_path
+		res = PctModels.File.get(PctModels.File.path == normd_path)
 	except:
 		if create:
-			return add_file(path)
+			res = add_file(path)
 		else:
-			return None
+			res = None
+	
+	if res is not None and create_access:
+		line,_,col,_ = get_range()
+		access = PctModels.FileAccess(
+			file	= res,
+			line	= line,
+			col		= col
+		)
+		access.save()
+	
+	return res
 
 def add_file(path):
 	"""
@@ -861,22 +1332,6 @@ def get_notes(path):
 	)
 	return notes
 
-def add_note(path, line_start, line_end, note="", column_start=0, column_end=0):
-	"""
-	"""
-	path = get_path(path)
-	review = get_review(path, line_start, line_end, column_start, column_end)
-	new_note = PctModels.Note(
-		path	= path,
-		review	= review,
-		note	= note
-	)
-	new_note.save()
-
-	update_status(vim.current.buffer.name)
-
-	return new_note
-
 def show_sign(id, sign_type, line, filename=None, buffer=None):
 	if filename is None:
 		filename = vim.current.buffer.name
@@ -903,26 +1358,6 @@ def show_review_signs(review, filename=None):
 	for line in range(review.line_start, review.line_end+1, 1):
 		id = review.id * 10000 + count
 		show_sign(id, "sign_reviewed", line, filename=filename)
-		count += 1
-
-def show_note_signs(note, filename=None):
-	count = 0
-	sign_type = "sign_note"
-	if "FINDING" in note.note:
-		sign_type = "sign_finding"
-	elif "TODO" in note.note:
-		sign_type = "sign_todo"
-	
-	try:
-		test = note.review.id
-	except:
-		warn('deleted bad note instance')
-		note.delete_instance()
-		return
-
-	for line in range(note.review.line_start, note.review.line_end+1, 1):
-		id = note.id * 20000 + count
-		show_sign(id, sign_type, line, filename=filename)
 		count += 1
 
 def buff_enter():
@@ -997,7 +1432,7 @@ def load_signs_all_buffers():
 # ----------------------------------------
 # ----------------------------------------
 
-def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_name="__THE_AUDIT__", retnr=-1, set_buftype=True, width=50, wrap=False, modify=False, syntax=None):
+def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_name="__THE_AUDIT__", retnr=-1, set_buftype=True, width=50, wrap=False, modify=False, syntax=None, window_pos="right", vertical=True):
 	if buff_exists(scratch_name):
 		buff_close(scratch_name, delete=True)
 
@@ -1010,8 +1445,22 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 	orig_range_start = vim.current.range.start
 	orig_range_end = vim.current.range.end
 
-	vim.command("silent keepalt botright vertical {width}split {name}".format(
+	if window_pos == "right":
+		window_pos = "botright"
+	elif window_pos == "left":
+		window_pos = "topleft"
+	else:
+		window_pos = "botright"
+	
+	if vertical:
+		vert = "vertical"
+	else:
+		vert = ""
+
+	vim.command("silent keepalt {pos} {vert} {width}split {name}".format(
+		pos=window_pos,
 		width=max_line_width,
+		vert=vert,
 		name=scratch_name
 	))
 	count = 0
@@ -1033,6 +1482,7 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 	vim.command("setlocal winfixwidth")
 	vim.command("setlocal textwidth=0")
 	vim.command("setlocal nospell")
+	vim.command("setlocal norelativenumber")
 	vim.command("setlocal nonumber")
 	if wrap:
 		vim.command("setlocal wrap")
@@ -1256,7 +1706,7 @@ def report():
 	vim.command("setlocal cursorline")
 
 history_name = "__THE_AUDIT_HISTORY__"
-def toggle_history():
+def toggle_history_old():
 	if buff_exists(history_name):
 		buff_close(history_name)
 		return
@@ -1348,22 +1798,6 @@ def note_selection(prefix="", prompt="note", multi=False, start=None, end=None):
 			show_current_notes()
 
 		ok("added " + prompt)
-
-def save_note_from_buffer():
-	line_start = int(vim.eval("b:line_start"))
-	line_end = int(vim.eval("b:line_end"))
-	bufname = vim.eval("b:note_bufname")
-
-	with open(vim.current.buffer.name, "r") as f:
-		text = f.read()
-
-	new_note = add_note(bufname, line_start, line_end, text)
-	retnr = int(vim.eval("b:retnr"))
-	vim.command("close")
-	if retnr != -1:
-		vim.command("{nr}wincmd w".format(nr=retnr))
-	
-	show_note_signs(new_note)
 
 def note_current_line(prefix="", prompt="note", multi=False, placeholder=""):
 	if not file_is_reviewable(vim.current.buffer.name):
@@ -1472,7 +1906,7 @@ def get_note_text_for_line(filename, line):
 had_note = False
 note_scratch = "__THE_AUDIT_NOTE__"
 status_line_notes = True
-def show_current_notes(status_line_notes_override=False):
+def show_current_notes_old(status_line_notes_override=False):
 	global had_note
 	global status_line_notes
 
@@ -1628,7 +2062,7 @@ def edit_note_on_line():
 		ok("Deleted note")
 		load_signs_buffer(vim.current.buffer.name)
 
-def jump_to_note(direction=1, curr_line=None):
+def jump_to_note_old(direction=1, curr_line=None):
 	"""
 	Jump to the next note in the file
 	"""
@@ -1684,9 +2118,10 @@ function! DefineAutoCommands()
 		autocmd!
 		"autocmd BufReadPre * py3 set_initial_review_mark()
 		autocmd BufAdd * py3 process_new_buffer()
+		autocmd VimEnter * py3 process_new_buffer()
 		autocmd BufEnter * py3 process_buff_enter()
 		autocmd CursorMoved * py3 process_cursor_moved()
-		"autocmd BufWritePost * call MaybeSaveNote()
+		autocmd BufWritePost * call MaybeSaveNote()
 		"autocmd VimEnter * py3 load_signs_all_buffers()
 		"autocmd CursorMoved * py3 cursor_moved()
 	augroup END
@@ -1697,14 +2132,34 @@ py3 init_db(create=False)
 " ---------------------------------------------
 " ---------------------------------------------
 
+" --------
+" THREADS
+" --------
 nmap [t :PctThreadCreate<CR>
 nmap [T :py3 toggle_thread_tree()<CR>
-nmap [a :py3 create_note()<CR>
 
-" " mark the selected line as as reviewed
-" vmap [r :py3 review_selection()<CR> 
-" nmap [r :py3 review_current_line()<CR>
-" 
+" --------
+" NOTES
+" --------
+vmap [a :py3 create_note(selection=True)<CR>
+vmap [A :py3 create_note(selection=True, one_line=False)<CR>
+nmap [a :py3 create_note()<CR>
+nmap [A :py3 create_note(one_line=False)<CR>
+
+" open the filepath under the cursor in a new tab
+map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>:setlocal ro<CR>
+
+" Notes/etc navigation
+map <silent> [n :py3 jump_to_note()<CR>
+map <silent> [N :py3 jump_to_note(down=False)<CR>
+
+" Reviews
+nmap [r :py3 mark_reviewed()<CR> 
+vmap [r :py3 mark_reviewed(selection=True)<CR> 
+
+" History/Reporting
+map [h :py3 toggle_history()<CR>
+ 
 " " mark from last mark up the cursor as reviewed
 " nmap [u mx'cV`x[rmc
 " 
@@ -1746,28 +2201,25 @@ nmap [a :py3 create_note()<CR>
 " " show a recent history
 " map [h :py3 toggle_history()<CR>
 " 
-" " open the filepath under the cursor in a new tab
-" map [o <C-w>gF:setlocal ro<CR>:setlocal nomodifiable<CR>
 " 
 " " jump to the previous note
-" nmap <silent> [n :py3 jump_to_note()<CR>
-" nmap <silent> [N :py3 jump_to_note(direction=-1)<CR>
 
 command! -nargs=0 PctThreadCreate py3 create_thread_node()
+command! -nargs=0 PctInit py3 init_db(True)
 
 " command! -nargs=0 PctReport py3 report()
 " command! -nargs=0 PctNotes py3 notes()
 " command! -nargs=0 PctAudit py3 toggle_audit()
-" command! -nargs=0 PctInit py3 init_db(True)
 
 " always show the status of files
 set laststatus=2
 
 function! DefineHighlights()
 	highlight tag_is_noted cterm=underline,bold
+	highlight current_thread cterm=underline,bold ctermbg=red ctermfg=white
 
 	highlight hl_finding ctermfg=red ctermbg=black
-	highlight hl_annotated_line cterm=bold ctermbg=black
+	highlight hl_annotated_line ctermbg=black
 	highlight hl_todo ctermfg=yellow ctermbg=black
 	highlight hl_note ctermfg=green ctermbg=black
 	highlight hl_reviewed ctermfg=blue ctermbg=black
@@ -1775,7 +2227,8 @@ function! DefineHighlights()
 	sign define sign_reviewed text=RR texthl=hl_reviewed
 	sign define sign_finding text=!! texthl=hl_finding linehl=hl_annotated_line
 	sign define sign_todo text=?? texthl=hl_todo linehl=hl_annotated_line
-	sign define sign_note text=>> texthl=hl_note linehl=hl_annotated_line
+	sign define sign_note text=>> texthl=hl_note
+	sign define sign_thread_node text=T texthl=hl_todo
 
 	highlight hl_audit_100_complete ctermfg=green
 	highlight hl_audit_good ctermfg=green
