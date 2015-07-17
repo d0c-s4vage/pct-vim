@@ -41,7 +41,7 @@
 " * Annotation Navigation
 " 	* [n   -   jump to the next annotation in the current file
 " 	* [N   -   jump to the previous annotation in the current file
-" 
+"
 " ## Notes
 "
 " Note that the only differentiation between annotations/findings/todos is the
@@ -62,6 +62,10 @@
 
 " ---------------------------------------------
 " ---------------------------------------------
+
+if exists('g:loaded_pct') && g:loaded_pct
+    finish
+endif
 
 function! DefinePct()
 python3 <<EOF
@@ -183,7 +187,7 @@ def buff_goto(name):
 	nr = buffwinnr(name)
 	if nr == -1:
 		return
-	
+
 	vim.command("{}wincmd w".format(nr))
 
 def root_path():
@@ -222,16 +226,16 @@ def file_is_reviewable(path):
 
 	if not os.path.exists(path):
 		return False
-	
+
 	if os.path.isdir(path):
 		return False
-	
+
 	if not DB:
 		return False
-	
+
 	if norm_path(path).startswith(".."):
 		return False
-	
+
 	return True
 
 def rev_norm_path(path):
@@ -279,7 +283,7 @@ def find_db(max_levels=15):
 			return curr_path
 		curr_level += 1
 		curr_path = os.path.join("..", curr_path)
-	
+
 	return None
 
 def create_db(dest_path):
@@ -293,12 +297,12 @@ def create_db(dest_path):
 	class BaseModel(Model):
 		class Meta:
 			database = DB
-	
+
 	class Path(BaseModel):
 		path = CharField(unique=True)
 		timestamp = DateTimeField(default=datetime.datetime.now)
 		line_count = IntegerField()
-	
+
 	class Review(BaseModel):
 		path = ForeignKeyField(Path)
 		timestamp = DateTimeField(default=datetime.datetime.now)
@@ -312,11 +316,11 @@ def create_db(dest_path):
 		review = ForeignKeyField(Review)
 		timestamp = DateTimeField(default=datetime.datetime.now)
 		note = TextField()
-	
+
 	class Scope(BaseModel):
 		path = ForeignKeyField(Path)
 		scope_flag = BooleanField()
-	
+
 	PctModels.Path = Path
 	PctModels.Review = Review
 	PctModels.Note = Note
@@ -347,7 +351,7 @@ def prompt_for_db_path():
 	for x in range(len(opts)):
 		opt = opts[x]
 		warn("  %s - %s" % (x, opt))
-	
+
 	choice = _input("Where would you like to create the database? (0-%d)" % (len(opts)-1))
 	warn("")
 
@@ -360,7 +364,7 @@ def prompt_for_db_path():
 	if not (0 <= choice < len(opts)):
 		err("Invalid choice")
 		return None
-	
+
 	return opts[choice]
 
 def init_db(create=True):
@@ -393,7 +397,7 @@ def get_path(path, create=True):
 	"""
 	if isinstance(path, PctModels.Path):
 		return path
-	
+
 	# normalize the path
 	normd_path = norm_path(path)
 
@@ -434,7 +438,7 @@ def get_review(path, line_start, line_end, column_start=0, column_end=0, create=
 	"""
 	if type(path) in [str]:
 		path = get_path(path)
-	
+
 	try:
 		rv = PctModels.Review
 		review = PctModels.Review.get(
@@ -510,10 +514,10 @@ def add_note(path, line_start, line_end, note="", column_start=0, column_end=0):
 def show_sign(id, sign_type, line, filename=None, buffer=None):
 	if filename is None:
 		filename = vim.current.buffer.name
-	
+
 	if filename is None and buf is None:
 		filename = vim.current.buffer.name
-	
+
 	which = None
 	if filename is not None:
 		which = "file=" + filename
@@ -542,7 +546,7 @@ def show_note_signs(note, filename=None):
 		sign_type = "sign_finding"
 	elif "TODO" in note.note:
 		sign_type = "sign_todo"
-	
+
 	try:
 		test = note.review.id
 	except:
@@ -565,7 +569,7 @@ def buff_enter():
 def update_status(bufname=None):
 	if bufname is None:
 		bufname = vim.current.buffer.name
-	
+
 	try:
 		if not file_is_reviewable(bufname):
 			new_status = "%f"
@@ -589,7 +593,7 @@ def load_signs_buffer(bufname):
 	# only worry about files that exist!
 	if bufname is None or not os.path.exists(bufname):
 		return
-	
+
 	unload_signs_buffer(bufname)
 
 	path = get_path(bufname)
@@ -598,10 +602,10 @@ def load_signs_buffer(bufname):
 
 	for review in reviews:
 		show_review_signs(review, filename=bufname)
-	
+
 	for note in notes:
 		show_note_signs(note, filename=bufname)
-	
+
 	update_status(bufname)
 
 def load_signs_new_buffer():
@@ -635,7 +639,7 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 		max_line_width = max(len(max(text.split("\n"), key=len)) + 4, 30)
 	else:
 		max_line_width = width
-	
+
 	orig_buffnr = winnr()
 	orig_range_start = vim.current.range.start
 	orig_range_end = vim.current.range.end
@@ -666,10 +670,10 @@ def create_scratch(text, fit_to_contents=True, return_to_orig=False, scratch_nam
 	vim.command("setlocal nonumber")
 	if wrap:
 		vim.command("setlocal wrap")
-	
+
 	if not modify:
 		vim.command("setlocal nomodifiable")
-	
+
 	if return_to_orig:
 		win_goto(orig_buffnr)
 
@@ -687,7 +691,7 @@ def notes(search=None):
 		)
 	else:
 		notes = PctModels.Note.select()
-	
+
 	lines = []
 	for note in notes:
 		cwd_path = rev_norm_path(note.review.path.path)
@@ -697,7 +701,7 @@ def notes(search=None):
 			line_start=note.review.line_start,
 			indented_note="\n".join(["    "+l for l in note.note.split("\n")])
 		))
-	
+
 	text = "THE AUDIT NOTES:\n\n" + "\n".join(lines)
 	create_scratch(text)
 
@@ -735,9 +739,9 @@ def get_status(path, no_filename=False, filename_max=0, raw=False):
 		coverage = len(all_lines) / float(finfo["path"].line_count)
 	else:
 		coverage = 1
-	
+
 	finfo["coverage"] = coverage
-	
+
 	status_text = None
 
 	if no_filename:
@@ -755,7 +759,7 @@ def get_status(path, no_filename=False, filename_max=0, raw=False):
 			finfo["todos"],
 			finfo["notes"]
 		))
-	
+
 	if raw:
 		return {
 			"text": status_text,
@@ -792,7 +796,7 @@ def _report_info():
 			"hl": hl
 		})
 		existing[path.path] = True
-	
+
 	unopened = []
 	d = os.path.join(root_path(), "***")
 	for root, dirnames, filenames in os.walk(root_path()):
@@ -803,14 +807,14 @@ def _report_info():
 				continue
 			cwd_rel_path = rev_norm_path(normd_path)
 			unopened.append(cwd_rel_path)
-	
+
 	if len(unopened) > 0:
 		statuses.append("")
 		statuses.append("----------------")
 		statuses.append("--- UNOPENED ---")
 		statuses.append("----------------")
 		statuses.append("")
-	
+
 	statuses += unopened
 
 	return statuses
@@ -834,7 +838,7 @@ def toggle_report():
 		buff_close(report_name)
 		return
 	report()
-	
+
 def report():
 	restore = (vim.current.buffer.name is not None and os.path.basename(vim.current.buffer.name) == report_name)
 	line,col = vim.current.window.cursor
@@ -851,7 +855,7 @@ def report():
 		if type(item) == str:
 			text.append(item)
 			continue
-		
+
 		text.append(item["status"])
 		colors.append({
 			"line": len(text),
@@ -877,7 +881,7 @@ def report():
 		vim.command("silent normal! lh")
 	else:
 		vim.command("normal! gg")
-	
+
 	# show the current cursor line
 	vim.command("setlocal cursorline")
 
@@ -886,7 +890,7 @@ def toggle_history():
 	if buff_exists(history_name):
 		buff_close(history_name)
 		return
-	
+
 	history()
 
 def history(n=50, match=None):
@@ -907,7 +911,7 @@ def history(n=50, match=None):
 					history.append("{}:{}".format(rev_norm_path(review.path.path), review.line_start))
 					showed_filename = True
 				history.append("\tNOTE ({})\n{}".format(note.timestamp, "\n".join("\t\t%s" % (x) for x in note.note.split("\n"))))
-	
+
 	if match is None:
 		create_scratch("HISTORY:\n\n" + "\n".join(history), scratch_name=history_name)
 	else:
@@ -925,7 +929,7 @@ def _review_lines(filename, line_start, line_end):
 		ok("marked as reviewed")
 
 	load_signs_buffer(vim.current.buffer.name)
-	
+
 	return review
 
 def review_selection():
@@ -988,7 +992,7 @@ def save_note_from_buffer():
 	vim.command("close")
 	if retnr != -1:
 		vim.command("{nr}wincmd w".format(nr=retnr))
-	
+
 	show_note_signs(new_note)
 
 def note_current_line(prefix="", prompt="note", multi=False, placeholder=""):
@@ -1026,7 +1030,7 @@ def note_current_line(prefix="", prompt="note", multi=False, placeholder=""):
 def cursor_moved():
 	if DB is None:
 			return
-	
+
 	if not file_is_reviewable(vim.current.buffer.name):
 		return
 
@@ -1042,7 +1046,7 @@ def cursor_moved():
 			if review.line_start <= line and review.line_end >= line:
 				found_review = True
 				break
-		
+
 		if not found_review:
 			review = add_review(filename, line, line)
 			show_review_signs(review)
@@ -1050,7 +1054,7 @@ def cursor_moved():
 def get_notes_for_line(filename, line):
 	if not file_is_reviewable(filename):
 		return []
-	
+
 	try:
 		all_notes = get_notes(filename)
 		count = 0
@@ -1085,14 +1089,14 @@ def note_to_text(note):
 def get_note_text_for_line(filename, line):
 	if not file_is_reviewable(filename):
 		return []
-	
+
 	notes = get_notes_for_line(filename, line)
 	text = []
 	for note in notes:
 		if len(text) > 0:
 			text.append("---------------------")
 		text.append(note_to_text(note))
-	
+
 	return text
 
 had_note = False
@@ -1112,12 +1116,12 @@ def show_current_notes(status_line_notes_override=False):
 	orig_bufnr = winnr()
 	closed_note = False
 
-	# only worry about files that 
+	# only worry about files that
 	if not file_is_reviewable(filename):
 		return
 
 	text = get_note_text_for_line(filename, line)
-	
+
 	if status_line_notes and not status_line_notes_override:
 		if len(text) > 0:
 			status = text[0].split("\n")[0]
@@ -1151,7 +1155,7 @@ def show_current_notes(status_line_notes_override=False):
 			#vim.command("!redraw")
 		had_note = False
 		closed_note = True
-	
+
 	# reselect whatever whas selected in visual mode
 	if is_visual(m) and (closed_note or had_note):
 		vim.command("normal! gv")
@@ -1167,11 +1171,11 @@ def delete_note_on_line():
 
 	if not file_is_reviewable(filename):
 		return
-	
+
 	notes = get_notes_for_line(filename, line)
 	if len(notes) == 0:
 		return
-	
+
 	if len(notes) == 1:
 		choice = _input("Are you sure you want to delete the current note? (y/n)")
 		if choice[0].lower() == "y":
@@ -1179,7 +1183,7 @@ def delete_note_on_line():
 			notes[0].delete_instance()
 			ok("Deleted note")
 			load_signs_buffer(vim.current.buffer.name)
-	
+
 	else:
 		idx = 0
 		for note in notes:
@@ -1218,11 +1222,11 @@ def edit_note_on_line():
 
 	if not file_is_reviewable(filename):
 		return
-	
+
 	notes = get_notes_for_line(filename, line)
 	if len(notes) == 0:
 		return
-	
+
 	if len(notes) == 1:
 		note = notes[0]
 		note_text = note.note
@@ -1270,7 +1274,7 @@ def jump_to_note(direction=1, curr_line=None):
 
 	if curr_line is None:
 		curr_line,_ = vim.current.window.cursor
-	
+
 	dest_line = None
 	for note in notes:
 		start = note.review.line_start
@@ -1281,7 +1285,7 @@ def jump_to_note(direction=1, curr_line=None):
 		elif not down and end < curr_line:
 			dest_line = end
 			break
-	
+
 	if dest_line is not None:
 		vim.current.window.cursor = (dest_line,0)
 		show_current_notes()
@@ -1323,31 +1327,31 @@ py3 init_db(create=False)
 " ---------------------------------------------
 
 " mark the selected line as as reviewed
-vmap [r :py3 review_selection()<CR> 
+vmap [r :py3 review_selection()<CR>
 nmap [r :py3 review_current_line()<CR>
 
 " mark from last mark up the cursor as reviewed
 nmap [u mx'cV`x[rmc
 
 " annotate the selected lines
-vmap [a :py3 note_selection()<CR> 
+vmap [a :py3 note_selection()<CR>
 nmap [a :py3 note_current_line()<CR>
-vmap [A :py3 note_selection(multi=True)<CR> 
+vmap [A :py3 note_selection(multi=True)<CR>
 nmap [A :py3 note_current_line(multi=True)<CR>
 
 " add a finding for the selected lines
-vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR> 
+vmap [f :py3 note_selection(prefix="FINDING", prompt="finding")<CR>
 nmap [f :py3 note_current_line(prefix="FINDING", prompt="finding")<CR>
-vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR> 
+vmap [F :py3 note_selection(prefix="FINDING", prompt="finding", multi=True)<CR>
 nmap [F :py3 note_current_line(prefix="FINDING", prompt="finding", multi=True)<CR>
 
 nmap [d :py3 delete_note_on_line()<CR>
 nmap [e :py3 edit_note_on_line()<CR>
 
 " add a todo for the selected lines
-vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR> 
+vmap [t :py3 note_selection(prefix="TODO", prompt="todo")<CR>
 nmap [t :py3 note_current_line(prefix="TODO", prompt="todo")<CR>
-vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR> 
+vmap [T :py3 note_selection(prefix="TODO", prompt="todo", multi=True)<CR>
 nmap [T :py3 note_current_line(prefix="TODO", prompt="todo", multi=True)<CR>
 
 " toggle auditing (q like record)
@@ -1413,3 +1417,5 @@ function! MaybeSaveNote()
 		py3 save_note_from_buffer()
 	endif
 endfunction
+
+let g:loaded_pct = 1
