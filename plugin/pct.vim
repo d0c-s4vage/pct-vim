@@ -506,6 +506,9 @@ def init_db(create=True):
 		# explicitly expand the root as the default
 		THREAD_TREE_INFO[root.id] = "expand"
 		_curr_thread(root)
+	
+	else:
+		err("no db found!")
 
 # ----------------------------------------------
 # ----------------------------------------------
@@ -1255,7 +1258,7 @@ def add_file(path):
 	path = norm_path(path)
 
 	line_count=0
-	with open(os.path.join(os.path.dirname(DB.database), path)) as f:
+	with open(os.path.join(os.path.dirname(DB.database), path), encoding="ISO-8859-1") as f:
 		data = f.read()
 		line_count = data.count("\n")
 		if data[-1] == "\n":
