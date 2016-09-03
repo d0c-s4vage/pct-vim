@@ -923,10 +923,16 @@ def _review_lines(filename, line_start, line_end):
 	if not file_is_reviewable(vim.current.buffer.name):
 		return
 
-	with v_restore_cursor():
-		review = add_review(filename, line_start, line_end)
-		show_review_signs(review)
-		ok("marked as reviewed")
+	review = get_review(filename, line_start, line_end, create=False)
+
+	if review is None:
+		with v_restore_cursor():
+			review = add_review(filename, line_start, line_end)
+			show_review_signs(review)
+			ok("marked as reviewed")
+	else:
+		review.delete_instance()
+		ok("unmarked as reviewed")
 
 	load_signs_buffer(vim.current.buffer.name)
 
